@@ -37,6 +37,7 @@ open Ast
 %token FUNCTION
 %token IF
 %token IN
+%token INVARIANT
 %token MOD
 %token NIL
 %token NOT
@@ -63,8 +64,6 @@ open Ast
 %type <Ast.ast_proc> proc_def
 
 %start program
-
-%right ELSE
 
 %%
 
@@ -94,9 +93,14 @@ stmt:
   | ASSERT expr { A_AssertStmt $2 }
   | IF expr THEN stmt { A_IfStmt ($2, $4, A_CompStmt []) }
   | IF expr THEN stmt ELSE stmt { A_IfStmt ($2, $4, $6) }
+  | REPEAT option(invariant) stmt_list UNTIL expr { A_RepeatStmt ($2, $3, $5) }
+
+invariant: INVARIANT expr {$2}
+
+stmt_list: separated_list(Semi, stmt) {$1}
 
 comp_stmt:
-  BEGIN separated_list(Semi, stmt) END {$2}
+  BEGIN stmt_list END {$2}
 
 factor:
   | Int { A_IntExpr $1 }
@@ -113,6 +117,10 @@ add_expr_op:
 rel_op:
   | Eq          { Canon.Eq }
   | NotEq       { Canon.NotEq }
+  | Lt          { Canon.Lt }
+  | GtEq        { Canon.GtEq }
+  | Gt          { Canon.Gt }
+  | LtEq        { Canon.LtEq }
 
 term:
   | factor {$1}
@@ -134,3 +142,5 @@ proc_def:
 
 lvalue:
   Ident { A_IdentExpr $1 }
+
+(* vim: set indentexpr= : *)

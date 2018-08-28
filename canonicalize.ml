@@ -32,6 +32,7 @@ let canon_lvalue env = function
 
 let rec canon_expr env = function
   | A_IntExpr i -> C_IntExpr i
+  | A_BoolExpr b -> C_BoolExpr b
   | A_IdentExpr name -> C_VarExpr (canon_ident_expr env.symtab name)
   | A_BinaryExpr (op, e1, e2) ->
     let e1' = canon_expr env e1 in
@@ -55,6 +56,17 @@ let rec canon_stmt env = function
     canon_stmt envF bodyF;
     let bodyF' = List.rev envF.stmts in
     emit env (C_IfStmt (cond', bodyT', bodyF'))
+  | A_RepeatStmt (inv, body, cond) ->
+    let inv' =
+      match inv with
+      | Some inv -> canon_expr env inv
+      | None -> C_BoolExpr true
+    in
+    let env' = { env with stmts = [] } in
+    body |> List.iter (canon_stmt env');
+    let cond' = canon_expr env' cond in
+    let body' = List.rev env'.stmts in
+    emit env (C_RepeatStmt (inv', body', cond'))
 
 type proc_tree = ProcTree of proc * proc_tree list
 

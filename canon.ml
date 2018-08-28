@@ -10,19 +10,27 @@ type var = {
   id : int;
 }
 
+type unary_op =
+  | Not
+
 type binary_op =
   | Add | Sub | Mul
-  | Eq | NotEq
+  | Eq | NotEq | Lt | GtEq | Gt | LtEq
+  | Imp
 
 type expr =
   | C_IntExpr of int
+  | C_BoolExpr of bool
   | C_VarExpr of var
+  | C_UnaryExpr of unary_op * expr
   | C_BinaryExpr of binary_op * expr * expr
 
 type stmt =
   | C_AssignStmt of var * expr
   | C_AssertStmt of expr
+  | C_AssumeStmt of expr
   | C_IfStmt of expr * stmt list * stmt list
+  | C_RepeatStmt of expr * stmt list * expr
 
 type proc = {
   name : string;
@@ -34,16 +42,27 @@ type proc = {
 
 open Format
 
+let string_of_unary_op = function
+  | Not -> "not"
+
 let string_of_binary_op = function
   | Add -> "+"
   | Sub -> "-"
   | Mul -> "*"
   | Eq -> "="
   | NotEq -> "<>"
+  | Lt -> "<"
+  | GtEq -> ">="
+  | Gt -> ">"
+  | LtEq -> "<="
+  | Imp -> "=>"
 
 let rec pp_expr f = function
   | C_IntExpr i -> pp_print_int f i
+  | C_BoolExpr b -> pp_print_bool f b
   | C_VarExpr var -> pp_print_string f var.name
+  | C_UnaryExpr (op, e) ->
+    fprintf f "(%s %a)" (string_of_unary_op op) pp_expr e
   | C_BinaryExpr (op, e1, e2) ->
     fprintf f "(%a %s %a)" pp_expr e1 (string_of_binary_op op) pp_expr e2
 
@@ -55,6 +74,8 @@ let rec pp_stmt indent f = function
     fprintf f "%a%s := %a\n" pp_indent indent lhs.name pp_expr rhs
   | C_AssertStmt e ->
     fprintf f "%aassert %a\n" pp_indent indent pp_expr e
+  | C_AssumeStmt e ->
+    fprintf f "%aassume %a\n" pp_indent indent pp_expr e
   | C_IfStmt (cond, bodyT, bodyF) ->
     fprintf f "%aif %a then begin\n" pp_indent indent pp_expr cond;
     bodyT |> List.iter (pp_stmt (indent+1) f);
@@ -65,6 +86,10 @@ let rec pp_stmt indent f = function
     fprintf f "%aend" pp_indent indent;
     end;
     pp_print_char f '\n'
+  | C_RepeatStmt (inv, body, cond) ->
+    fprintf f "%arepeat invariant %a\n" pp_indent indent pp_expr inv;
+    body |> List.iter (pp_stmt (indent+1) f);
+    fprintf f "%auntil %a\n" pp_indent indent pp_expr cond
 
 let pp_proc f proc =
   fprintf f "procedure %s\n" proc.name;

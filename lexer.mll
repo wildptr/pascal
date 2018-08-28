@@ -55,6 +55,7 @@ rule read = parse
   | "function"          { FUNCTION }
   | "if"                { IF }
   | "in"                { IN }
+  | "invariant"         { INVARIANT }
   | "mod"               { MOD }
   | "nil"               { NIL }
   | "not"               { NOT }

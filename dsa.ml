@@ -11,28 +11,33 @@ type var_info_persist = {
   cache : (int, var) Hashtbl.t;
 }
 
+type stack_entry = {
+  tab : var_info array;
+  mutable stmts : stmt list;
+}
+
 type env = {
-  mutable tab_stack : var_info array list;
+  mutable stack : stack_entry list;
   ptab : var_info_persist array;
   mutable new_vars : var list;
   mutable var_id : int;
   n_old_var : int;
 }
 
-let top env =
-  List.hd env.tab_stack
+let top_tab env =
+  (List.hd env.stack).tab
 
 let push env =
-  let new_tab = Array.copy (top env) in
-  env.tab_stack <- new_tab :: env.tab_stack
+  let tab = Array.copy (top_tab env) in
+  env.stack <- { tab; stmts = [] } :: env.stack
 
 let pop env =
-  let tab = top env in
-  env.tab_stack <- List.tl env.tab_stack;
-  tab
+  match env.stack with
+  | { tab; stmts } :: tl -> env.stack <- tl; tab, List.rev stmts
+  | _ -> failwith "pop"
 
 let new_version env id =
-  let tab = List.hd env.tab_stack in
+  let tab = top_tab env in
   let vi = tab.(id) in
   let ver = vi.ver + 1 in
   let orig = env.ptab.(id).orig in
@@ -47,41 +52,67 @@ let new_version env id =
   cur
 
 let fresh_var env id =
-  let tab = List.hd env.tab_stack in
+  let tab = top_tab env in
   let ver = tab.(id).ver + 1 in
   match Hashtbl.find env.ptab.(id).cache ver with
   | exception Not_found -> new_version env id
   | v ->
-    let tab = top env in
+    let tab = top_tab env in
     tab.(id) <- { cur = v; ver };
     v
 
 let rec dsa_expr tab = function
-  | C_IntExpr _ as e -> e
+  | C_IntExpr _ | C_BoolExpr _ as e -> e
   | C_VarExpr v -> C_VarExpr tab.(v.id).cur
+  | C_UnaryExpr (op, e) -> C_UnaryExpr (op, dsa_expr tab e)
   | C_BinaryExpr (op, e1, e2) ->
     let e1' = dsa_expr tab e1 in
     let e2' = dsa_expr tab e2 in
     C_BinaryExpr (op, e1', e2')
 
+(*
+let rec mark_uses tab = function
+  | C_IntExpr _ | C_BoolExpr _ -> ()
+  | C_VarExpr v -> tab.(v.id) <- true
+  | C_BinaryExpr (_, e1, e2) -> mark_uses tab e1; mark_uses tab e2
+
+let rec mark_uses_stmt tab = function
+  | C_AssignStmt (_, e) -> mark_uses tab e
+  | C_AssertStmt e -> mark_uses tab e
+  | C_IfStmt (e, s1, s2) ->
+    mark_uses tab e;
+    List.iter (mark_uses_stmt tab) s1;
+    List.iter (mark_uses_stmt tab) s2
+  | C_RepeatStmt (inv, body, cond) ->
+    mark_uses tab inv;
+    List.iter (mark_uses_stmt tab) body;
+    mark_uses tab cond
+*)
+
+let emit env s =
+  let top = List.hd env.stack in
+  top.stmts <- s :: top.stmts
+
 let rec dsa_stmt env = function
   | C_AssignStmt (lhs, rhs) ->
-    let rhs' = dsa_expr (top env) rhs in
+    let rhs' = dsa_expr (top_tab env) rhs in
     let lhs' = fresh_var env lhs.id in
-    C_AssignStmt (lhs', rhs')
+    C_AssignStmt (lhs', rhs') |> emit env
   | C_AssertStmt e ->
-    C_AssertStmt (dsa_expr (top env) e)
+    C_AssertStmt (dsa_expr (top_tab env) e) |> emit env
+  | C_AssumeStmt e ->
+    C_AssumeStmt (dsa_expr (top_tab env) e) |> emit env
   | C_IfStmt (cond, bodyT, bodyF) ->
-    let cond' = dsa_expr (top env) cond in
+    let cond' = dsa_expr (top_tab env) cond in
     push env;
-    let bodyT' = bodyT |> List.map (dsa_stmt env) in
-    let tabT = pop env in
+    bodyT |> List.iter (dsa_stmt env);
+    let tabT, bodyT' = pop env in
     push env;
-    let bodyF' = bodyF |> List.map (dsa_stmt env) in
-    let tabF = pop env in
+    bodyF |> List.iter (dsa_stmt env);
+    let tabF, bodyF' = pop env in
     let assignsT = ref [] in
     let assignsF = ref [] in
-    let tab = top env in
+    let tab = top_tab env in
     for i=0 to env.n_old_var-1 do
       let verT = tabT.(i).ver in
       let verF = tabF.(i).ver in
@@ -100,7 +131,23 @@ let rec dsa_stmt env = function
     done;
     let bodyT' = bodyT' @ (List.rev !assignsT) in
     let bodyF' = bodyF' @ (List.rev !assignsF) in
-    C_IfStmt (cond', bodyT', bodyF')
+    C_IfStmt (cond', bodyT', bodyF') |> emit env
+  | C_RepeatStmt (inv, body, cond) ->
+    let tab = top_tab env in
+    C_AssertStmt (dsa_expr tab inv) |> emit env;
+    let defs =
+      body |> List.fold_left begin fun set stmt ->
+        match stmt with
+        | C_AssignStmt (lhs, _) -> Set.Int.add lhs.id set
+        | _ -> set
+      end Set.Int.empty
+    in
+    defs |> Set.Int.iter (fun i -> fresh_var env i |> ignore);
+    C_AssumeStmt (dsa_expr tab inv) |> emit env;
+    List.iter (dsa_stmt env) body;
+    let cond' = dsa_expr tab cond in
+    C_AssertStmt (C_BinaryExpr (Imp, C_UnaryExpr (Not, cond'), dsa_expr tab inv)) |> emit env;
+    C_AssumeStmt cond' |> emit env
 
 let dsa_proc proc =
   let n_old_var = Array.length proc.vars in
@@ -109,9 +156,11 @@ let dsa_proc proc =
     proc.vars |> Array.map (fun v -> { orig = v; cache = Hashtbl.create 0 })
   in
   let env =
-    { tab_stack = [tab]; ptab; new_vars = []; var_id = n_old_var; n_old_var }
+    { stack = [{ tab; stmts=[] }];
+      ptab; new_vars = []; var_id = n_old_var; n_old_var }
   in
-  let body = proc.body |> List.map (dsa_stmt env) in
+  proc.body |> List.iter (dsa_stmt env);
+  let _, body = pop env in
   let new_vars = env.new_vars |> List.rev |> Array.of_list in
   let n_new_var = Array.length new_vars in
   let vars =

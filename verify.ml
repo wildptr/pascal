@@ -9,7 +9,13 @@ type env = {
 
 let rec convert_expr env = function
   | C_IntExpr i -> Z3.Arithmetic.Integer.mk_numeral_i env.z3 i
+  | C_BoolExpr b -> Z3.Boolean.mk_val env.z3 b
   | C_VarExpr v -> env.tab.(v.id)
+  | C_UnaryExpr (op, e) ->
+    let e' = convert_expr env e in
+    begin match op with
+      | Not -> Z3.Boolean.mk_not env.z3 e'
+    end
   | C_BinaryExpr (op, e1, e2) ->
     let e1' = convert_expr env e1 in
     let e2' = convert_expr env e2 in
@@ -19,6 +25,11 @@ let rec convert_expr env = function
       | Mul -> Z3.Arithmetic.mk_sub env.z3 [e1';e2']
       | Eq -> Z3.Boolean.mk_eq env.z3 e1' e2'
       | NotEq -> Z3.Boolean.mk_not env.z3 (Z3.Boolean.mk_eq env.z3 e1' e2')
+      | Lt -> Z3.Arithmetic.mk_lt env.z3 e1' e2'
+      | GtEq -> Z3.Arithmetic.mk_ge env.z3 e1' e2'
+      | Gt -> Z3.Arithmetic.mk_gt env.z3 e1' e2'
+      | LtEq -> Z3.Arithmetic.mk_le env.z3 e1' e2'
+      | Imp -> Z3.Boolean.mk_implies env.z3 e1' e2'
     end
 
 let rec wp env s q =
