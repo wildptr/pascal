@@ -31,8 +31,9 @@ type stmt =
   | C_AssumeStmt of expr
   | C_IfStmt of expr * stmt list * stmt list
   | C_RepeatStmt of expr * stmt list * expr
+  | C_CallStmt of var array * proc * expr array
 
-type proc = {
+and proc = {
   name : string;
   arg_types : typ array;
   ret_types : typ array;
@@ -66,8 +67,23 @@ let rec pp_expr f = function
   | C_BinaryExpr (op, e1, e2) ->
     fprintf f "(%a %s %a)" pp_expr e1 (string_of_binary_op op) pp_expr e2
 
+let pp_list pp f = function
+  | [] -> ()
+  | hd :: tl -> pp f hd; tl |> List.iter (fprintf f ", %a" pp)
+
+let pp_array pp f a =
+  let n = Array.length a in
+  if n > 0 then begin
+    pp f a.(0);
+    for i=1 to n-1 do
+      fprintf f ", %a" pp a.(i)
+    done
+  end
+
 let pp_indent f indent =
   String.make (indent*2) ' ' |> pp_print_string f
+
+let pp_var f (v:var) = pp_print_string f v.name
 
 let rec pp_stmt indent f = function
   | C_AssignStmt (lhs, rhs) ->
@@ -90,6 +106,11 @@ let rec pp_stmt indent f = function
     fprintf f "%arepeat invariant %a\n" pp_indent indent pp_expr inv;
     body |> List.iter (pp_stmt (indent+1) f);
     fprintf f "%auntil %a\n" pp_indent indent pp_expr cond
+  | C_CallStmt (vars, proc, args) ->
+    pp_indent f indent;
+    if Array.length vars > 0 then
+      fprintf f "%a := " (pp_array pp_var) vars;
+    fprintf f "%s(%a)\n" proc.name (pp_array pp_expr) args
 
 let pp_proc f proc =
   fprintf f "procedure %s\n" proc.name;

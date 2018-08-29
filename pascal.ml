@@ -12,15 +12,24 @@ let () =
       exit 1
   in
   let procs = Canonicalize.canon_program ast in
-  let procs_dsa = procs |> List.map Dsa.dsa_proc in
+  (*let procs_dsa = procs |> List.map Dsa.dsa_proc in
   procs_dsa |> List.iter (Format.printf "%a@." Canon.pp_proc);
   procs_dsa |> List.iter begin fun proc ->
     let passive_proc = Passify.passify_proc proc in
     let status =
       match Verify.verify_proc passive_proc with
-      | Verify.Unsat -> "unsat"
+      | Verify.Invalid -> "invalid"
+      | Verify.Valid -> "valid"
       | Verify.Unknown -> "unknown"
-      | Verify.Sat -> "sat"
     in
     print_endline status
+  end*)
+  let module LowerX86 = Lower.Machine(X86) in
+  let module RegAllocX86 = Regalloc.Machine(X86) in
+  procs |> List.iter begin fun proc ->
+    proc
+    |> Translate.translate_proc
+    |> LowerX86.lower_proc
+    |> RegAllocX86.allocate_registers
+    |> X86.emit_asm Format.std_formatter
   end

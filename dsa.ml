@@ -148,6 +148,11 @@ let rec dsa_stmt env = function
     let cond' = dsa_expr tab cond in
     C_AssertStmt (C_BinaryExpr (Imp, C_UnaryExpr (Not, cond'), dsa_expr tab inv)) |> emit env;
     C_AssumeStmt cond' |> emit env
+  | C_CallStmt (vars, proc, args) ->
+    let tab = top_tab env in
+    let args' = args |> Array.map (dsa_expr tab) in
+    let vars' = vars |> Array.map (fun v -> fresh_var env v.id) in
+    C_CallStmt (vars', proc, args') |> emit env
 
 let dsa_proc proc =
   let n_old_var = Array.length proc.vars in

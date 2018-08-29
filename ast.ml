@@ -21,6 +21,7 @@ type ast_stmt =
   | A_AssertStmt of ast_expr
   | A_IfStmt of ast_expr * ast_stmt * ast_stmt
   | A_RepeatStmt of ast_expr option * ast_stmt list * ast_expr
+  | A_CallStmt of string * ast_expr list
 
 type ast_block = {
   vars : var_decl list;

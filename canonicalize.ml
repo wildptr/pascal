@@ -21,19 +21,24 @@ let resolve_type = function
   | "boolean" -> BoolType
   | name -> failwith ("unknown type: "^name)
 
-let canon_ident_expr symtab name =
+let lookup_var symtab name =
   match M.find name symtab with
   | Var v -> v
   | _ -> failwith ("not a variable: " ^ name)
 
+let lookup_proc symtab name =
+  match M.find name symtab with
+  | Proc p -> p
+  | _ -> failwith ("not a procedure: " ^ name)
+
 let canon_lvalue env = function
-  | A_IdentExpr name -> canon_ident_expr env.symtab name
+  | A_IdentExpr name -> lookup_var env.symtab name
   | _ -> failwith "not an l-value"
 
 let rec canon_expr env = function
   | A_IntExpr i -> C_IntExpr i
   | A_BoolExpr b -> C_BoolExpr b
-  | A_IdentExpr name -> C_VarExpr (canon_ident_expr env.symtab name)
+  | A_IdentExpr name -> C_VarExpr (lookup_var env.symtab name)
   | A_BinaryExpr (op, e1, e2) ->
     let e1' = canon_expr env e1 in
     let e2' = canon_expr env e2 in
@@ -67,6 +72,10 @@ let rec canon_stmt env = function
     let cond' = canon_expr env' cond in
     let body' = List.rev env'.stmts in
     emit env (C_RepeatStmt (inv', body', cond'))
+  | A_CallStmt (name, args) ->
+    let proc = lookup_proc env.symtab name in
+    let args' = args |> List.map (canon_expr env) |> Array.of_list in
+    emit env (C_CallStmt ([||], proc, args'))
 
 type proc_tree = ProcTree of proc * proc_tree list
 

@@ -94,6 +94,8 @@ stmt:
   | IF expr THEN stmt { A_IfStmt ($2, $4, A_CompStmt []) }
   | IF expr THEN stmt ELSE stmt { A_IfStmt ($2, $4, $6) }
   | REPEAT option(invariant) stmt_list UNTIL expr { A_RepeatStmt ($2, $3, $5) }
+  | Ident { A_CallStmt ($1, []) }
+  | Ident LParen expr_list RParen { A_CallStmt ($1, $3) }
 
 invariant: INVARIANT expr {$2}
 
@@ -104,6 +106,8 @@ comp_stmt:
 
 factor:
   | Int { A_IntExpr $1 }
+  | TRUE { A_BoolExpr true }
+  | FALSE { A_BoolExpr false }
   | Ident { A_IdentExpr $1 }
   | LParen expr RParen {$2}
 
@@ -142,5 +146,7 @@ proc_def:
 
 lvalue:
   Ident { A_IdentExpr $1 }
+
+expr_list: separated_list(Comma, expr) {$1}
 
 (* vim: set indentexpr= : *)

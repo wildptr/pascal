@@ -1,1 +1,3 @@
-<*>: use_menhir, package(batteries), package(z3), debug
+<*>: package(batteries), debug, use_menhir
+<verify.*> or <pascal.*>: package(z3)
+<regalloc.*> or <pascal.*>: package(ocamlgraph)

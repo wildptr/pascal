@@ -46,7 +46,7 @@ let rec wp env s q =
     let z3 = env.z3 in
     mk_and z3 [mk_implies z3 e pT; mk_implies z3 (mk_not z3 e) pF]
 
-type sat_status = Unsat | Unknown | Sat
+type sat_status = Invalid | Valid | Unknown
 
 let verify_proc proc =
   let z3 = Z3.mk_context [] in
@@ -71,6 +71,6 @@ let verify_proc proc =
   Z3.Solver.add solver [Z3.Boolean.mk_not z3 vc];
   let status = Z3.Solver.check solver [] in
   match status with
-  | Z3.Solver.UNSATISFIABLE -> Unsat
+  | Z3.Solver.UNSATISFIABLE -> Valid
   | Z3.Solver.UNKNOWN -> Unknown
-  | Z3.Solver.SATISFIABLE -> Sat
+  | Z3.Solver.SATISFIABLE -> Invalid

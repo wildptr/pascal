@@ -12,7 +12,8 @@ let rec passify_stmt env = function
   | C_AssignStmt (lhs, rhs) ->
     emit env (P_Assume (C_BinaryExpr (Eq, C_VarExpr lhs, rhs)))
   | C_AssertStmt e ->
-    emit env (P_Assert e)
+    emit env (P_Assert e);
+    emit env (P_Assume e)
   | C_AssumeStmt e ->
     emit env (P_Assume e)
   | C_IfStmt (cond, bodyT, bodyF) ->
@@ -24,6 +25,8 @@ let rec passify_stmt env = function
     let bodyF' = List.rev envF.stmts in
     emit env (P_If (cond, bodyT', bodyF'))
   | C_RepeatStmt _ -> failwith "REPEAT statement"
+  | C_CallStmt (vars, proc, args) ->
+    ()
 
 let passify_proc (proc : proc) =
   let env = { stmts = [] } in
