@@ -86,6 +86,7 @@ type canon_proc_env = {
   proc_vars : var list;
   var_lid : int;
   depth : int;
+  parent_proc : proc_head option
 }
 
 type 'a tree = Tree of 'a * 'a tree list
@@ -101,7 +102,7 @@ let make_proc_head env (proc : ast_proc) =
   let qual_name = env.qual_name_prefix ^ name in
   let id = env.proc_id in
   let depth = env.depth in
-  let head = { name; qual_name; params; id; depth } in
+  let head = { name; qual_name; params; id; depth; parent = env.parent_proc } in
   Printf.eprintf "procedure %s(%d) depth: %d\n" name id depth;
   let symtab = M.add name (Proc head) env.symtab in
   { env with symtab; proc_id = id+1 }, head
@@ -133,7 +134,7 @@ let rec canon_proc env (proc : ast_proc) =
     let qual_name_prefix = head.qual_name ^ "." in
     let env =
       { symtab; all_vars; var_gid; proc_id = env.proc_id; qual_name_prefix;
-        proc_vars; var_lid; depth = env.depth+1 }
+        proc_vars; var_lid; depth = env.depth+1; parent_proc = Some head }
     in
     List.fold_left begin fun (env, l) sub ->
       let env', sub_tree = canon_proc env sub in
@@ -142,12 +143,14 @@ let rec canon_proc env (proc : ast_proc) =
   in
 
   let vars = proc_vars |> List.rev |> Array.of_list in
-
   let canon_env = { symtab = env'.symtab; stmts = [] } in
   proc.block.body |> List.iter (canon_stmt canon_env);
+  let proc =
+    { head; body = List.rev canon_env.stmts; vars; local_start = env.var_lid }
+  in
   { env with
     all_vars = env'.all_vars; var_gid = env'.var_gid; proc_id = env'.proc_id },
-  Tree ({ head; body = List.rev canon_env.stmts; vars }, List.rev sub_trees_rev)
+  Tree (proc, List.rev sub_trees_rev)
 
 let flatten_tree t =
   let acc = ref [] in
@@ -170,7 +173,8 @@ let canon_program (prog : ast_program) =
     qual_name_prefix = "";
     proc_vars = [];
     var_lid = 0;
-    depth = 0
+    depth = 0;
+    parent_proc = None
   } in
   let env', proc_tree = canon_proc env proc in
   let procs = flatten_tree proc_tree |> Array.of_list in

@@ -42,6 +42,7 @@ type proc_head = {
   params : param array;
   id : int;
   depth : int;
+  parent : proc_head option
 }
 
 type stmt =
@@ -56,6 +57,7 @@ type proc = {
   head : proc_head;
   body : stmt list;
   vars : var array;
+  local_start : int
 }
 
 type program = {
