@@ -26,16 +26,26 @@ let uses = function
   | SpecInst.PUSH o -> opd_uses o
 
 let translate_inst = function
-  | AbsMachInst.ARG (_, o) -> MACH (PUSH o)
-  | AbsMachInst.RETVAL (i, r) -> MOV (r, Reg i)
+  | AbsMachInst.PUT_ARG (_, o) -> MACH (PUSH o)
+  | AbsMachInst.GET_ARG (i, r) -> LOAD (r, (Some 5, imm_i (8+4*i)))
+  | AbsMachInst.PUT_RETVAL (i, o) -> MOV (i, o)
+  | AbsMachInst.GET_RETVAL (i, r) -> MOV (r, Reg i)
+  | AbsMachInst.GET_FP r -> MOV (r, Reg 5)
 
-let k = 6
-let reg_name = [|"eax";"ecx";"edx";"ebx";"esi";"edi"|]
+let n_reg = 8
+let n_reg_avail = 6
+let reg_mask = lnot 0b11001111
+let reg_name = [|"eax";"ecx";"edx";"ebx";"esp";"ebp";"esi";"edi"|]
+
+let t_config = Translate.
+  { fp = 5;
+    n_reg;
+    param_loc = fun i -> RO_Off (8+4*i) }
 
 open Format
 
 let pp_reg f r =
-  if r >= 0 && r < k then
+  if r >= 0 && r < 8 then
     pp_print_string f reg_name.(r)
   else fprintf f "r%d" r
 
@@ -131,6 +141,13 @@ let emit_inst f = function
     fprintf f "\tcall\t%a\n" pp_opd o
   | RET ->
     fprintf f "\tret\n"
+  | PHI (r, l) ->
+    fprintf f "\tPHI\t%a" pp_reg r;
+    let pp_rhs f { pred; r } =
+      fprintf f "%d:%a" pred pp_reg r
+    in
+    List.iter (fprintf f ", %a" pp_rhs) l;
+    pp_print_char f '\n'
   | MACH (PUSH o) ->
     fprintf f "\tpush\t%a\n" pp_opd o
 

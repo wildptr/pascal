@@ -22,7 +22,9 @@ module type MachineType = sig
   val defs : SpecInst.t -> Set.Int.t
   val uses : SpecInst.t -> Set.Int.t
   val call_defs : Set.Int.t
-  val k : int
+  val n_reg : int
+  val n_reg_avail : int
+  val reg_mask : int
 end
 
 module Machine (M : MachineType) = struct
@@ -38,6 +40,7 @@ module Machine (M : MachineType) = struct
     | LOAD (r, _) -> S.singleton r
     | MUL (r, _, _) -> S.singleton r
     | CALL _ -> M.call_defs
+    | PHI (r, _) -> S.singleton r
     | MACH inst -> M.defs inst
     | _ -> S.empty
 
@@ -53,6 +56,8 @@ module Machine (M : MachineType) = struct
     | MUL (_, r, o) -> S.add r (opd_uses o)
     | CALL o -> opd_uses o
     | RET -> S.empty
+    | PHI (_, l) ->
+      List.fold_right (fun rhs s -> S.add rhs.r s) l S.empty
     | MACH inst -> M.uses inst
 
 end

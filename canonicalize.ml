@@ -6,7 +6,7 @@ module M = Map.String
 
 type entry =
   | Var of var
-  | Proc of proc
+  | Proc of proc_head
 
 type canon_env = {
   symtab: entry M.t;
@@ -77,44 +77,104 @@ let rec canon_stmt env = function
     let args' = args |> List.map (canon_expr env) |> Array.of_list in
     emit env (C_CallStmt ([||], proc, args'))
 
-type proc_tree = ProcTree of proc * proc_tree list
+type canon_proc_env = {
+  symtab : entry M.t;
+  all_vars : var list;
+  var_gid : int;
+  proc_id : int;
+  qual_name_prefix : string;
+  proc_vars : var list;
+  var_lid : int;
+  depth : int;
+}
 
-let rec canon_proc parent_symtab first_var_id (proc : ast_proc) =
-  let symtab, var_id, vars_rev =
-    proc.block.vars |> List.fold_left begin fun (st, id, vr) (names, ast_type) ->
+type 'a tree = Tree of 'a * 'a tree list
+
+let make_proc_head env (proc : ast_proc) =
+  let params =
+    proc.params |> List.map begin fun (byref, names, ast_type) ->
       let typ = resolve_type ast_type in
-      names |> List.fold_left begin fun (st, id, vr) name ->
-        let v = { name; typ; id } in
-        M.add name (Var v) st, id+1, v :: vr
-      end (st, id, vr)
-    end (parent_symtab, first_var_id, [])
+      names |> List.map (fun name -> { byref; name; typ })
+    end |> List.concat |> Array.of_list
   in
-  let vars = vars_rev |> List.rev |> Array.of_list in
-  let symtab, subprocs_rev =
-    proc.block.procs |> List.fold_left begin fun (st, subs) ast_proc ->
-      let ProcTree (subproc, _) as subproc_tree =
-        canon_proc st var_id ast_proc
-      in
-      let st' = M.add ast_proc.name (Proc subproc) st in
-      let subs' = subproc_tree :: subs in
-      st', subs'
-    end (symtab, [])
-  in
-  let env = { symtab; stmts = [] } in
-  proc.block.body |> List.iter (canon_stmt env);
-  ProcTree
-    ({ name = proc.name; arg_types = [||]; ret_types = [||];
-       body = env.stmts |> List.rev; vars }, List.rev subprocs_rev)
+  let name = proc.name in
+  let qual_name = env.qual_name_prefix ^ name in
+  let id = env.proc_id in
+  let depth = env.depth in
+  let head = { name; qual_name; params; id; depth } in
+  Printf.eprintf "procedure %s(%d) depth: %d\n" name id depth;
+  let symtab = M.add name (Proc head) env.symtab in
+  { env with symtab; proc_id = id+1 }, head
 
-let rec flatten_proc_tree t =
+let rec canon_proc env (proc : ast_proc) =
+  let env, head = make_proc_head env proc in
+  let params =
+    head.params |> Array.to_list |> List.mapi
+      (fun i { byref; name; typ } -> name, typ, byref, Some i)
+  in
+  let local_vars =
+    proc.block.vars |> List.map begin fun (names, ast_type) ->
+      let typ = resolve_type ast_type in
+      names |> List.map (fun name -> name, typ, false, None)
+    end |> List.concat
+  in
+  let symtab, all_vars, var_gid, proc_vars, var_lid =
+    List.fold_left begin fun (st, vl, gid, pvl, lid) (name, typ, isref, param_id) ->
+      let qual_name = head.qual_name ^ "." ^ name in
+      let v =
+        { name; qual_name; typ; gid; lid; isref; param_id; proc_id = head.id }
+      in
+      M.add name (Var v) st, v::vl, gid+1, v::pvl, lid+1
+    end (env.symtab, env.all_vars, env.var_gid, env.proc_vars, env.var_lid)
+      (params @ local_vars)
+  in
+
+  let env', sub_trees_rev =
+    let qual_name_prefix = head.qual_name ^ "." in
+    let env =
+      { symtab; all_vars; var_gid; proc_id = env.proc_id; qual_name_prefix;
+        proc_vars; var_lid; depth = env.depth+1 }
+    in
+    List.fold_left begin fun (env, l) sub ->
+      let env', sub_tree = canon_proc env sub in
+      env', sub_tree :: l
+    end (env, []) proc.block.procs
+  in
+
+  let vars = proc_vars |> List.rev |> Array.of_list in
+
+  let canon_env = { symtab = env'.symtab; stmts = [] } in
+  proc.block.body |> List.iter (canon_stmt canon_env);
+  { env with
+    all_vars = env'.all_vars; var_gid = env'.var_gid; proc_id = env'.proc_id },
+  Tree ({ head; body = List.rev canon_env.stmts; vars }, List.rev sub_trees_rev)
+
+let flatten_tree t =
   let acc = ref [] in
-  let rec visit (ProcTree (p, l)) =
-    l |> List.iter visit;
-    acc := p :: !acc
+  let rec visit (Tree (n, c)) =
+    acc := n :: !acc;
+    List.iter visit c
   in
   visit t;
   List.rev !acc
 
 let canon_program (prog : ast_program) =
-  let (proc : ast_proc) = { name = prog.name; block = prog.block } in
-  canon_proc M.empty 0 proc |> flatten_proc_tree
+  let (proc : ast_proc) =
+    { name = prog.name; params = []; block = prog.block }
+  in
+  let env = {
+    symtab = M.empty;
+    all_vars = [];
+    var_gid = 0;
+    proc_id = 0;
+    qual_name_prefix = "";
+    proc_vars = [];
+    var_lid = 0;
+    depth = 0
+  } in
+  let env', proc_tree = canon_proc env proc in
+  let procs = flatten_tree proc_tree |> Array.of_list in
+  for i=0 to env'.proc_id-1 do
+    assert (procs.(i).head.id = i)
+  done;
+  { procs; vars = env'.all_vars |> List.rev |> Array.of_list }

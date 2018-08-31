@@ -2,6 +2,8 @@ type ast_type = string
 
 type var_decl = string list * ast_type
 
+type param_decl = bool * string list * ast_type
+
 type ast_expr =
   | A_IntExpr of int
   | A_BoolExpr of bool
@@ -31,6 +33,7 @@ type ast_block = {
 
 and ast_proc = {
   name : string;
+  params : param_decl list;
   block : ast_block;
 }
 

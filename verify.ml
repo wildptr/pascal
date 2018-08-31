@@ -59,6 +59,7 @@ let verify_proc proc =
         match var.typ with
         | IntType -> int_sort
         | BoolType -> bool_sort
+        | _ -> failwith "not implemented"
       in
       Z3.Expr.mk_const_s z3 var.name sort
     end

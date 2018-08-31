@@ -1,4 +1,5 @@
 open Batteries
+open Canon
 
 let () =
   Printexc.record_backtrace true;
@@ -11,24 +12,27 @@ let () =
         pos.pos_lnum (pos.pos_cnum - pos.pos_bol);
       exit 1
   in
-  let procs = Canonicalize.canon_program ast in
-  (*let procs_dsa = procs |> List.map Dsa.dsa_proc in
-  procs_dsa |> List.iter (Format.printf "%a@." Canon.pp_proc);
-  procs_dsa |> List.iter begin fun proc ->
-    let passive_proc = Passify.passify_proc proc in
-    let status =
-      match Verify.verify_proc passive_proc with
+  let prog = Canonicalize.canon_program ast in
+  let alias_tab = Alias.build_alias_table prog in
+  let vis_tab = Visibility.build_table prog in
+  let module LowerX86 = Lower.Machine(X86) in
+  let module RegAllocX86 = Regalloc.Machine(X86) in
+  (*prog.procs |> Array.iter begin fun proc ->
+    proc
+    |> Dsa.dsa_proc alias_tab
+    |> Passify.passify_proc
+    |> Verify.verify_proc
+    |> begin function
       | Verify.Invalid -> "invalid"
       | Verify.Valid -> "valid"
       | Verify.Unknown -> "unknown"
-    in
-    print_endline status
-  end*)
-  let module LowerX86 = Lower.Machine(X86) in
-  let module RegAllocX86 = Regalloc.Machine(X86) in
-  procs |> List.iter begin fun proc ->
+    end
+    |> Printf.eprintf "%s: %s\n" proc.head.name
+  end;*)
+  let t_info = Translate.{ vis_tab } in
+  let iprog = Translate.translate X86.t_config t_info prog in
+  iprog.procs |> Array.iter begin fun proc ->
     proc
-    |> Translate.translate_proc
     |> LowerX86.lower_proc
     |> RegAllocX86.allocate_registers
     |> X86.emit_asm Format.std_formatter

@@ -22,6 +22,7 @@ type env = {
   mutable new_vars : var list;
   mutable var_id : int;
   n_old_var : int;
+  alias_tab : Set.Int.t array;
 }
 
 let top_tab env =
@@ -44,7 +45,9 @@ let new_version env id =
   let id' = env.var_id in
   env.var_id <- env.var_id + 1;
   let cur =
-    { name = Printf.sprintf "%s#%d" orig.name ver; typ = orig.typ; id = id'}
+    let suffix = "#" ^ string_of_int ver in
+    { orig with
+      name = orig.name ^ suffix; qual_name = orig.qual_name ^ suffix; id = id' }
   in
   env.new_vars <- cur :: env.new_vars;
   tab.(id) <- { cur; ver };
@@ -60,6 +63,13 @@ let fresh_var env id =
     let tab = top_tab env in
     tab.(id) <- { cur = v; ver };
     v
+
+let fresh_var_alias env id =
+  let v = fresh_var env id in
+  env.alias_tab.(id) |> Set.Int.iter begin fun alias_id ->
+    fresh_var env alias_id |> ignore
+  end;
+  v
 
 let rec dsa_expr tab = function
   | C_IntExpr _ | C_BoolExpr _ as e -> e
@@ -96,7 +106,7 @@ let emit env s =
 let rec dsa_stmt env = function
   | C_AssignStmt (lhs, rhs) ->
     let rhs' = dsa_expr (top_tab env) rhs in
-    let lhs' = fresh_var env lhs.id in
+    let lhs' = fresh_var_alias env lhs.id in
     C_AssignStmt (lhs', rhs') |> emit env
   | C_AssertStmt e ->
     C_AssertStmt (dsa_expr (top_tab env) e) |> emit env
@@ -151,10 +161,10 @@ let rec dsa_stmt env = function
   | C_CallStmt (vars, proc, args) ->
     let tab = top_tab env in
     let args' = args |> Array.map (dsa_expr tab) in
-    let vars' = vars |> Array.map (fun v -> fresh_var env v.id) in
+    let vars' = vars |> Array.map (fun (v:var) -> fresh_var_alias env v.id) in
     C_CallStmt (vars', proc, args') |> emit env
 
-let dsa_proc proc =
+let dsa_proc alias_tab (proc : proc) =
   let n_old_var = Array.length proc.vars in
   let tab = proc.vars |> Array.map (fun v -> { cur = v; ver = 0 }) in
   let ptab =
@@ -162,7 +172,7 @@ let dsa_proc proc =
   in
   let env =
     { stack = [{ tab; stmts=[] }];
-      ptab; new_vars = []; var_id = n_old_var; n_old_var }
+      ptab; new_vars = []; var_id = n_old_var; n_old_var; alias_tab }
   in
   proc.body |> List.iter (dsa_stmt env);
   let _, body = pop env in

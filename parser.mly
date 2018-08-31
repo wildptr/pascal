@@ -141,8 +141,11 @@ rel_expr:
 expr: rel_expr {$1}
 
 proc_def:
-  PROCEDURE name=Ident Semi block=block Semi
-  {{ name; block }}
+  PROCEDURE name=Ident params=loption(delimited(LParen, separated_list(Comma, param_decl), RParen)) Semi block=block Semi
+  {{ name; params; block }}
+
+param_decl:
+  boption(VAR) ident_list Colon Ident { $1, $2, $4 }
 
 lvalue:
   Ident { A_IdentExpr $1 }

@@ -8,9 +8,13 @@ type opd =
   | Reg of reg
   | Imm of imm
 
-let mk_imm_s s = Imm { s; i = 0 }
-let mk_imm_i i = Imm { s = ""; i }
-let mk_imm s i = Imm { s; i }
+let imm_s s = { s; i = 0 }
+let imm_i i = { s = ""; i }
+let imm s i = { s; i }
+
+let imm_opd_s s = Imm (imm_s s)
+let imm_opd_i i = Imm (imm_i i)
+let imm_opd s i = Imm (imm s i)
 
 type alu1 =
   | NOT
@@ -50,6 +54,8 @@ module type SpecInstType = sig
   val map : (reg -> reg) -> t -> t
 end
 
+type phi_rhs = { pred : int; mutable r : int }
+
 module OfInstType (I : SpecInstType) = struct
 
   type inst =
@@ -64,6 +70,7 @@ module OfInstType (I : SpecInstType) = struct
     | MUL of reg * reg * opd
     | CALL of opd
     | RET
+    | PHI of reg * phi_rhs list
     | MACH of I.t
 
   let map_inst f = function
@@ -89,6 +96,8 @@ module OfInstType (I : SpecInstType) = struct
       CALL (map_opd f o)
     | RET ->
       RET
+    | PHI (r, l) ->
+      PHI (f r, List.map (fun {pred;r} -> { pred; r = f r }) l)
     | MACH inst ->
       MACH (I.map f inst)
 
@@ -98,9 +107,13 @@ module OfInstType (I : SpecInstType) = struct
     name : string;
   }
 
-  type proc = {
+  type iproc = {
     blocks : block array;
     n_reg : int;
+  }
+
+  type iprog = {
+    procs : iproc array;
   }
 
 end
@@ -108,12 +121,18 @@ end
 module AbsMachInst = struct
 
   type t =
-    | ARG of int * opd
-    | RETVAL of int * reg
+    | PUT_ARG of int * opd
+    | GET_ARG of int * reg
+    | PUT_RETVAL of int * opd
+    | GET_RETVAL of int * reg
+    | GET_FP of reg
 
   let map f = function
-    | ARG (i, o) -> ARG (i, map_opd f o)
-    | RETVAL (i, r) -> RETVAL (i, f r)
+    | PUT_ARG (i, o) -> PUT_ARG (i, map_opd f o)
+    | GET_ARG (i, r) -> GET_ARG (i, f r)
+    | PUT_RETVAL (i, o) -> PUT_RETVAL (i, map_opd f o)
+    | GET_RETVAL (i, r) -> GET_RETVAL (i, f r)
+    | GET_FP r -> GET_FP (f r)
 
 end
 

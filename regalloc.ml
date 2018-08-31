@@ -35,7 +35,7 @@ module Machine (M : MachineType) = struct
     done;
 
     let changed = ref false in
-    let rec loop () =
+    let rec loop it =
       for i=n-1 downto 0 do
         live_in.(i) <- S.union use.(i) (S.diff live_out.(i) def.(i));
         pred.(i) |> List.iter begin fun j ->
@@ -44,9 +44,12 @@ module Machine (M : MachineType) = struct
             (changed := true; live_out.(j) <- tmp)
         end;
       done;
-      if !changed then (changed := false; loop ())
+      if !changed then
+        (changed := false; loop (it+1))
+      else
+        Printf.eprintf "liveness: fixpoint reached after iteration %d\n" (it+1)
     in
-    loop ();
+    loop 0;
 
     (* build interference graph *)
 
@@ -56,7 +59,7 @@ module Machine (M : MachineType) = struct
       G.add_vertex g i
     done;
 
-    let connect live =
+    let connect defs live =
       let a = S.to_array live in
       let n = Array.length a in
       for i=0 to n-1 do
@@ -69,10 +72,17 @@ module Machine (M : MachineType) = struct
 
     for i=0 to n-1 do
       let live = live_out.(i) in
-      connect live;
+      connect
+        (proc.blocks.(i).succ |> List.map begin fun j ->
+            match proc.blocks.(j).insts with
+            | [] -> S.empty
+            | inst::_ -> defs inst
+          end |> List.fold_left S.union S.empty)
+        live;
       List.fold_right begin fun inst live ->
+        let d = defs inst in
         let live' = S.union (S.diff live (defs inst)) (uses inst) in
-        connect live';
+        connect d live';
         live'
       end proc.blocks.(i).insts live |> ignore
     done;
@@ -80,7 +90,7 @@ module Machine (M : MachineType) = struct
     (* register allocation *)
 
     let neighbors = Array.make nr [] in
-    for i=M.k to nr-1 do
+    for i=M.n_reg to nr-1 do
       neighbors.(i) <- G.succ g i
     done;
 
@@ -90,7 +100,7 @@ module Machine (M : MachineType) = struct
       let removed = Array.make nr false in
       let rec loop old_p =
         for i=0 to nr-1 do
-          if not removed.(i) && G.out_degree g i < M.k then begin
+          if not removed.(i) && G.out_degree g i < M.n_reg_avail then begin
             decr p;
             color_order.(!p) <- i;
             G.remove_vertex g i;
@@ -109,15 +119,15 @@ module Machine (M : MachineType) = struct
 
     let color = Array.make nr (-1) in
     (* pre-color physical registers *)
-    for i=0 to M.k-1 do color.(i) <- i done;
-    for i=M.k to nr-1 do
-      let f = ref (- 1 lsl M.k) in
+    for i=0 to M.n_reg-1 do color.(i) <- i done;
+    for i=M.n_reg to nr-1 do
+      let f = ref M.reg_mask in
       neighbors.(i) |> List.iter begin fun j ->
         let c = color.(j) in
         if c >= 0 then f := !f lor (1 lsl c)
       end;
       let rec loop c =
-        if c = M.k then -1
+        if c = M.n_reg then -1
         else if !f land (1 lsl c) = 0 then c
         else loop (c+1)
       in

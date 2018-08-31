@@ -6,8 +6,13 @@ type typ =
 
 type var = {
   name : string;
+  qual_name : string;
   typ : typ;
-  id : int;
+  gid : int;
+  lid : int;
+  isref : bool;
+  param_id : int option;
+  proc_id : int;
 }
 
 type unary_op =
@@ -25,19 +30,36 @@ type expr =
   | C_UnaryExpr of unary_op * expr
   | C_BinaryExpr of binary_op * expr * expr
 
+type param = {
+  byref : bool;
+  name : string;
+  typ : typ;
+}
+
+type proc_head = {
+  name : string;
+  qual_name : string;
+  params : param array;
+  id : int;
+  depth : int;
+}
+
 type stmt =
   | C_AssignStmt of var * expr
   | C_AssertStmt of expr
   | C_AssumeStmt of expr
   | C_IfStmt of expr * stmt list * stmt list
   | C_RepeatStmt of expr * stmt list * expr
-  | C_CallStmt of var array * proc * expr array
+  | C_CallStmt of var array * proc_head * expr array
 
-and proc = {
-  name : string;
-  arg_types : typ array;
-  ret_types : typ array;
+type proc = {
+  head : proc_head;
   body : stmt list;
+  vars : var array;
+}
+
+type program = {
+  procs : proc array;
   vars : var array;
 }
 
@@ -113,7 +135,8 @@ let rec pp_stmt indent f = function
     fprintf f "%s(%a)\n" proc.name (pp_array pp_expr) args
 
 let pp_proc f proc =
-  fprintf f "procedure %s\n" proc.name;
+  let head = proc.head in
+  fprintf f "procedure %s\n" head.name;
   pp_print_string f "begin\n";
   proc.body |> List.iter (pp_stmt 1 f);
   pp_print_string f "end\n";
