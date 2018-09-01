@@ -16,7 +16,8 @@ module Machine (M : MachineType) = struct
 
     (* liveness analysis *)
 
-    let n = Array.length proc.blocks in
+    let blocks = proc.blocks in
+    let n = Array.length blocks in
     let nr = proc.n_reg in
 
     let def       = Array.make n S.empty in
@@ -27,11 +28,11 @@ module Machine (M : MachineType) = struct
     let pred = Array.make n [] in
 
     for i=0 to n-1 do
-      proc.blocks.(i).insts |> List.iter begin fun inst ->
+      blocks.(i).insts |> List.iter begin fun inst ->
         use.(i) <- S.union use.(i) (S.diff (uses inst) def.(i));
         def.(i) <- S.union def.(i) (defs inst)
       end;
-      proc.blocks.(i).succ |> List.iter (fun j -> pred.(j) <- i :: pred.(j))
+      blocks.(i).succ |> List.iter (fun j -> pred.(j) <- i :: pred.(j))
     done;
 
     let changed = ref false in
@@ -53,7 +54,16 @@ module Machine (M : MachineType) = struct
 
     (* build interference graph *)
 
-    let module G = Graph.Imperative.Graph.Concrete (MyInt) in
+    let module G =
+      Graph.Imperative.Graph.Concrete
+        (struct
+          type t = int
+          let compare = Int.compare
+          let equal = Int.equal
+          let hash i = i
+        end)
+    in
+
     let g = G.create ~size:nr () in
     for i=0 to nr-1 do
       G.add_vertex g i
@@ -64,27 +74,25 @@ module Machine (M : MachineType) = struct
       let n = Array.length a in
       for i=0 to n-1 do
         for j=i+1 to n-1 do
-          Printf.eprintf "%d -- %d\n" a.(i) a.(j);
+          Printf.eprintf "interfere: %d -- %d\n" a.(i) a.(j);
           G.add_edge g a.(i) a.(j)
         done
       done
     in
 
     for i=0 to n-1 do
-      let live = live_out.(i) in
-      connect
-        (proc.blocks.(i).succ |> List.map begin fun j ->
-            match proc.blocks.(j).insts with
-            | [] -> S.empty
-            | inst::_ -> defs inst
-          end |> List.fold_left S.union S.empty)
-        live;
+      let live_in_i =
       List.fold_right begin fun inst live ->
-        let d = defs inst in
-        let live' = S.union (S.diff live (defs inst)) (uses inst) in
-        connect d live';
-        live'
-      end proc.blocks.(i).insts live |> ignore
+        let def = defs inst in
+        connect def live;
+        S.union (S.diff live def) (uses inst)
+      end blocks.(i).insts live_out.(i)
+      in
+      assert (S.equal live_in_i live_in.(i));
+      pred.(i) |> List.iter begin fun j ->
+        let def = defs (List.last blocks.(j).insts) in
+        connect def live_in_i
+      end
     done;
 
     (* register allocation *)

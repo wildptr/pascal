@@ -48,7 +48,6 @@ type env = {
   mutable n_block : int;
   var_info : var_info array;
   config : config;
-  proc : proc_head;
   nvar : int
 }
 
@@ -79,23 +78,6 @@ let rec convert_mem_loc env b = function
     let r = fresh_reg env in
     LOAD (r, m) |> emit_block b;
     (Some r, imm_i off)
-
-(*let rec get_fp env b f =
-  if f < env.proc.depth then
-    if f+1 = env.proc.depth then begin
-      match env.config.param_loc (Array.length env.proc.params) with
-      | RO_Reg _ -> failwith ""
-      | RO_Off off ->
-        let r = fresh_reg env in
-        LOAD (r, (Some env.config.fp, imm_i off)) |> emit_block b;
-        r
-    end else begin
-      let fp = get_fp env b (f+1) in
-      let r = fresh_reg env in
-      LOAD (r, (Some fp, imm_i 0)) |> emit_block b;
-      r
-    end
-  else env.config.fp*)
 
 let get_loc env v =
   env.var_info.(v).loc
@@ -439,11 +421,10 @@ let translate config (info : info) (prog : program) =
         n_block = 1;
         var_info;
         config;
-        proc = proc.head;
         nvar
       } in
       proc.body |> List.iter (translate_stmt env);
-        (* write back visible outer variables and ref parameters *)
+      (* write back visible outer variables and ref parameters *)
       for i=0 to proc.local_start-1 do
         write_back env i
       done;
