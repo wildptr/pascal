@@ -29,7 +29,8 @@ type config = {
 }
 
 type info = {
-  vis_tab : bool array
+  vis_tab : bool array;
+  alias_tab : VarSet.t array
 }
 
 type mem_loc =
@@ -38,7 +39,8 @@ type mem_loc =
 
 type var_info = {
   visible : bool;
-  loc : mem_loc option
+  loc : mem_loc option;
+  aliases : int list
 }
 
 type env = {
@@ -48,7 +50,9 @@ type env = {
   mutable n_block : int;
   var_info : var_info array;
   config : config;
-  nvar : int
+  nvar : int;
+  proc_depth : int;
+  var_start : int array
 }
 
 let emit_block b inst =
@@ -90,6 +94,9 @@ let get_mem env b v =
 
 let is_visible env v =
   env.var_info.(v).visible
+
+let get_aliases env v =
+  env.var_info.(v).aliases
 
 let get_addr env b v =
   let (base, off) = get_mem env b v in
@@ -173,7 +180,7 @@ let rec translate_expr env = function
   | C_IntExpr i -> imm_opd_i i
   | C_BoolExpr b -> imm_opd_i (if b then 1 else 0)
   | C_VarExpr v -> get_var env v.lid
-  | C_UnaryExpr (op, e) ->
+  | C_UnaryExpr (op, e, _) ->
     let s = translate_expr env e |> to_reg env in
     let d = fresh_reg env in
     let op' =
@@ -181,7 +188,7 @@ let rec translate_expr env = function
       | Not -> NOT
     in
     emit env (ALU1 (op', s, d)); Reg d
-  | C_BinaryExpr (op, e1, e2) ->
+  | C_BinaryExpr (op, e1, e2, _) ->
     let s1 = translate_expr env e1 |> to_reg env in
     let s2 = translate_expr env e2 in
     let d = fresh_reg env in
@@ -214,7 +221,7 @@ let negate_cond2 = function
   | LE -> GT
 
 let translate_cond env neg target = function
-  | C_BinaryExpr (op, e1, e2) as e ->
+  | C_BinaryExpr (op, e1, e2, _) as e ->
     let c =
       match op with
       | Eq    -> Some EQ
@@ -235,28 +242,25 @@ let translate_cond env neg target = function
     end
   | e -> translate_cond_generic env neg target e
 
-let translate_assign env (v:var) o =
-  let r = fresh_reg env in
-  MOV (r, o) |> emit env;
-  (* TODO kill aliases *)
-  if v.isref then
-    let m = get_mem env env.current_block v.lid in
-    STORE (m, Reg r) |> emit env;
-    update_reg env.current_block v.lid r true;
-  else
-    update_reg env.current_block v.lid r false
-
-let write_back_reg env v r =
-  match get_loc env v with
-  | None -> ()
-  | Some _ ->
-    let m = get_mem env env.current_block v in
-    STORE (m, Reg r) |> emit env
+let do_write_back env v r =
+  let m = get_mem env env.current_block v in
+  STORE (m, Reg r) |> emit env;
+  update_reg env.current_block v r true
 
 let write_back env v =
   match get_reg env.current_block v with
-  | Some (r, m) -> if not m then write_back_reg env v r
+  | Some (r, m) -> if not m then do_write_back env v r
   | None -> ()
+
+let translate_assign env (v:var) o =
+  let r = fresh_reg env in
+  MOV (r, o) |> emit env;
+  (* kill aliases *)
+  get_aliases env v.lid |> List.iter (kill_reg env.current_block);
+  if v.isref then
+    do_write_back env v.lid r
+  else
+    update_reg env.current_block v.lid r false
 
 let rec translate_stmt env = function
   | C_AssignStmt (lhs, rhs) ->
@@ -314,8 +318,8 @@ let rec translate_stmt env = function
       | Some _, None ->
         let r = load_var env env.current_block v in
         patch_rhs v r
-      | None, Some (r, _) ->
-        write_back_reg env v r
+      | None, Some (r, m) ->
+        if not m then do_write_back env v r
       | None, None ->
         ()
     done;
@@ -332,7 +336,13 @@ let rec translate_stmt env = function
       in
       emit env (MACH (PUT_ARG (i, o)))
     end;
-    for v=0 to env.nvar-1 do
+    let v_end =
+      if proc.depth > env.proc_depth then
+        env.nvar
+      else
+        env.var_start.(proc.depth)
+    in
+    for v=0 to v_end - 1 do
       if is_visible env v then begin
         write_back env v;
         kill_reg env.current_block v
@@ -364,8 +374,8 @@ let translate config (info : info) (prog : program) =
     match v.param_id with
     | Some i ->
       begin match config.param_loc i with
-      | RO_Reg _ -> alloc v
-      | RO_Off off -> loctab.(v.gid) <- Some (vd, off)
+        | RO_Reg _ -> alloc v
+        | RO_Off off -> loctab.(v.gid) <- Some (vd, off)
       end
     | None -> alloc v
   end;
@@ -420,7 +430,13 @@ let translate config (info : info) (prog : program) =
               if v.isref then Indirect (l, 0) else l
             end
           in
-          { loc; visible = info.vis_tab.(v.gid) }
+          let aliases =
+            info.alias_tab.(v.gid) |> VarSet.enum |> List.of_enum |>
+            List.filter_map begin fun v ->
+              if v.proc_id = head.id then Some v.lid else None
+            end
+          in
+          { loc; visible = info.vis_tab.(v.gid); aliases }
         end
       in
       let env = {
@@ -430,7 +446,9 @@ let translate config (info : info) (prog : program) =
         n_block = 1;
         var_info;
         config;
-        nvar
+        nvar;
+        proc_depth = head.depth;
+        var_start = proc.var_start
       } in
       proc.body |> List.iter (translate_stmt env);
       (* write back visible outer variables and ref parameters *)
@@ -444,7 +462,7 @@ let translate config (info : info) (prog : program) =
         env.blocks |> List.map finalize_block |> List.rev |> Array.of_list
       in
       let n_reg = env.next_reg in
-      { blocks; n_reg }
+      { name = head.qual_name; blocks; n_reg }
     end
   in
   { procs }

@@ -151,7 +151,7 @@ let emit_inst f = function
   | MACH (PUSH o) ->
     fprintf f "\tpush\t%a\n" pp_opd o
 
-let emit_block f blk =
+let emit_block f (blk:block) =
   fprintf f "%s:\n" blk.name;
   blk.insts |> List.iter (emit_inst f)
 

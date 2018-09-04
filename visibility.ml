@@ -11,8 +11,8 @@ let rec scan_expr env = function
   | C_VarExpr v ->
     if v.proc_id <> env.proc_id then
       env.tab.(v.gid) <- true
-  | C_UnaryExpr (_, e) -> scan_expr env e
-  | C_BinaryExpr (_, e1, e2) -> scan_expr env e1; scan_expr env e2
+  | C_UnaryExpr (_, e, _) -> scan_expr env e
+  | C_BinaryExpr (_, e1, e2, _) -> scan_expr env e1; scan_expr env e2
 
 let rec scan_stmt env = function
   | C_AssignStmt (v, e) ->

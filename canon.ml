@@ -15,11 +15,20 @@ type var = {
   proc_id : int;
 }
 
+module Var = struct
+  type t = var
+  let equal v1 v2 = v1.gid = v2.gid
+  let compare v1 v2 = Int.compare v1.gid v2.gid
+  let hash v = v.gid
+end
+
+module VarSet = Set.Make(Var)
+
 type unary_op =
   | Not
 
 type binary_op =
-  | Add | Sub | Mul
+  | Add | Sub | Mul | And | Or | LogAnd | LogOr
   | Eq | NotEq | Lt | GtEq | Gt | LtEq
   | Imp
 
@@ -27,8 +36,15 @@ type expr =
   | C_IntExpr of int
   | C_BoolExpr of bool
   | C_VarExpr of var
-  | C_UnaryExpr of unary_op * expr
-  | C_BinaryExpr of binary_op * expr * expr
+  | C_UnaryExpr of unary_op * expr * typ
+  | C_BinaryExpr of binary_op * expr * expr * typ
+
+let type_of_expr = function
+  | C_IntExpr _ -> IntType
+  | C_BoolExpr _ -> BoolType
+  | C_VarExpr v -> v.typ
+  | C_UnaryExpr (_, _, typ) -> typ
+  | C_BinaryExpr (_, _, _, typ) -> typ
 
 type param = {
   byref : bool;
@@ -74,6 +90,10 @@ let string_of_binary_op = function
   | Add -> "+"
   | Sub -> "-"
   | Mul -> "*"
+  | And -> "and"
+  | Or -> "or"
+  | LogAnd -> "&"
+  | LogOr -> "|"
   | Eq -> "="
   | NotEq -> "<>"
   | Lt -> "<"
@@ -86,9 +106,9 @@ let rec pp_expr f = function
   | C_IntExpr i -> pp_print_int f i
   | C_BoolExpr b -> pp_print_bool f b
   | C_VarExpr var -> pp_print_string f var.name
-  | C_UnaryExpr (op, e) ->
+  | C_UnaryExpr (op, e, _) ->
     fprintf f "(%s %a)" (string_of_unary_op op) pp_expr e
-  | C_BinaryExpr (op, e1, e2) ->
+  | C_BinaryExpr (op, e1, e2, _) ->
     fprintf f "(%a %s %a)" pp_expr e1 (string_of_binary_op op) pp_expr e2
 
 let pp_list pp f = function

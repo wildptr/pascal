@@ -107,13 +107,14 @@ module OfInstType (I : SpecInstType) = struct
     name : string;
   }
 
-  type iproc = {
+  type abs_proc = {
+    name : string;
     blocks : block array;
     n_reg : int;
   }
 
-  type iprog = {
-    procs : iproc array;
+  type abs_prog = {
+    procs : abs_proc array;
   }
 
 end

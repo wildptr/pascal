@@ -35,6 +35,10 @@ let canon_lvalue env = function
   | A_IdentExpr name -> lookup_var env.symtab name
   | _ -> failwith "not an l-value"
 
+let check_type e t =
+  if type_of_expr e <> t then
+    failwith "type error"
+
 let rec canon_expr env = function
   | A_IntExpr i -> C_IntExpr i
   | A_BoolExpr b -> C_BoolExpr b
@@ -42,7 +46,62 @@ let rec canon_expr env = function
   | A_BinaryExpr (op, e1, e2) ->
     let e1' = canon_expr env e1 in
     let e2' = canon_expr env e2 in
-    C_BinaryExpr (op, e1', e2')
+    let op', typ =
+      match op with
+      | A_Add ->
+        check_type e1' IntType;
+        check_type e2' IntType;
+        Add, IntType
+      | A_Sub ->
+        check_type e1' IntType;
+        check_type e2' IntType;
+        Sub, IntType
+      | A_Mul ->
+        check_type e1' IntType;
+        check_type e2' IntType;
+        Mul, IntType
+      | A_And ->
+        begin match type_of_expr e1' with
+          | IntType ->
+            check_type e2' IntType;
+            LogAnd, IntType
+          | BoolType ->
+            check_type e2' BoolType;
+            And, BoolType
+        end
+      | A_Or ->
+        begin match type_of_expr e1' with
+          | IntType ->
+            check_type e2' IntType;
+            LogOr, IntType
+          | BoolType ->
+            check_type e2' BoolType;
+            Or, BoolType
+        end
+      | A_Eq ->
+        check_type e2' (type_of_expr e1');
+        Eq, BoolType
+      | A_NotEq ->
+        check_type e2' (type_of_expr e1');
+        NotEq, BoolType
+      | A_Lt ->
+        check_type e1' IntType;
+        check_type e2' IntType;
+        Lt, BoolType
+      | A_GtEq ->
+        check_type e1' IntType;
+        check_type e2' IntType;
+        GtEq, BoolType
+      | A_Gt ->
+        check_type e1' IntType;
+        check_type e2' IntType;
+        Gt, BoolType
+      | A_LtEq ->
+        check_type e1' IntType;
+        check_type e2' IntType;
+        LtEq, BoolType
+    in
+    C_BinaryExpr (op', e1', e2', typ)
 
 let rec canon_stmt env = function
   | A_CompStmt l -> l |> List.iter (canon_stmt env)

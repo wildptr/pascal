@@ -30,7 +30,7 @@ let () =
     end
     |> Printf.eprintf "%s: %s\n" proc.head.name
   end;*)
-  let t_info = Translate.{ vis_tab } in
+  let t_info = Translate.{ vis_tab; alias_tab } in
   let iprog = Translate.translate X86.t_config t_info prog in
   iprog.procs |> Array.iter begin fun proc ->
     proc

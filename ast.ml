@@ -4,18 +4,21 @@ type var_decl = string list * ast_type
 
 type param_decl = bool * string list * ast_type
 
+type binary_op =
+  | A_Add
+  | A_Sub
+  | A_Mul
+  | A_And
+  | A_Or
+  | A_Eq | A_NotEq
+  | A_Lt | A_GtEq
+  | A_Gt | A_LtEq
+
 type ast_expr =
   | A_IntExpr of int
   | A_BoolExpr of bool
   | A_IdentExpr of string
-  | A_BinaryExpr of Canon.binary_op * ast_expr * ast_expr
-
-(*
-type ast_log_expr =
-  | A_IntLogExpr of int
-  | A_IdentLogExpr of string
-  | A_BinaryLogExpr of Canon.binary_op * ast_log_expr * ast_log_expr
-*)
+  | A_BinaryExpr of binary_op * ast_expr * ast_expr
 
 type ast_stmt =
   | A_CompStmt of ast_stmt list

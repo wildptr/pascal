@@ -112,19 +112,21 @@ factor:
   | LParen expr RParen {$2}
 
 term_op:
-  | Star        { Canon.Mul }
+  | Star        { A_Mul }
+  | AND         { A_And }
 
 add_expr_op:
-  | Plus        { Canon.Add }
-  | Minus       { Canon.Sub }
+  | Plus        { A_Add }
+  | Minus       { A_Sub }
+  | OR          { A_Or }
 
 rel_op:
-  | Eq          { Canon.Eq }
-  | NotEq       { Canon.NotEq }
-  | Lt          { Canon.Lt }
-  | GtEq        { Canon.GtEq }
-  | Gt          { Canon.Gt }
-  | LtEq        { Canon.LtEq }
+  | Eq          { A_Eq }
+  | NotEq       { A_NotEq }
+  | Lt          { A_Lt }
+  | GtEq        { A_GtEq }
+  | Gt          { A_Gt }
+  | LtEq        { A_LtEq }
 
 term:
   | factor {$1}

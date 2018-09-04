@@ -48,7 +48,8 @@ module Machine (M : MachineType) = struct
       if !changed then
         (changed := false; loop (it+1))
       else
-        Printf.eprintf "liveness: fixpoint reached after iteration %d\n" (it+1)
+        Printf.eprintf "liveness(%s): fixpoint reached after iteration %d\n"
+          proc.name (it+1)
     in
     loop 0;
 
@@ -74,7 +75,7 @@ module Machine (M : MachineType) = struct
       let n = Array.length a in
       for i=0 to n-1 do
         for j=i+1 to n-1 do
-          Printf.eprintf "interfere: %d -- %d\n" a.(i) a.(j);
+          (* Printf.eprintf "interfere: %d -- %d\n" a.(i) a.(j); *)
           G.add_edge g a.(i) a.(j)
         done
       done
