@@ -13,6 +13,7 @@ let () =
       exit 1
   in
   let prog = Canonicalize.canon_program ast in
+  prog.procs |> Array.iter (Canon.pp_proc Format.std_formatter);
   let alias_tab = Alias.build_alias_table prog in
   let vis_tab = Visibility.build_table prog in
   let module LowerX86 = Lower.Machine(X86) in

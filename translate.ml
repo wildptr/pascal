@@ -8,7 +8,7 @@ type tblock = {
   name : string;
   id : int;
   mutable succ : int list;
-  regtab : reg option array
+  regtab : (reg * bool) option array
 }
 
 let add_succ b1 b2 =
@@ -65,8 +65,8 @@ let fresh_reg env =
 let get_reg b v =
   b.regtab.(v)
 
-let update_reg b v r =
-  b.regtab.(v) <- Some r
+let update_reg b v r m =
+  b.regtab.(v) <- Some (r, m)
 
 let kill_reg b v =
   b.regtab.(v) <- None
@@ -110,12 +110,12 @@ let load_var env b v =
   let m = get_mem env b v in
   let r = fresh_reg env in
   LOAD (r, m) |> emit env;
-  update_reg b v r;
+  update_reg b v r true;
   r
 
 let get_var env v =
   match get_reg env.current_block v with
-  | Some r -> Reg r
+  | Some (r, _) -> Reg r
   | None -> Reg (load_var env env.current_block v)
 
 let fresh_block_id env =
@@ -126,21 +126,24 @@ let fresh_block_id env =
 let merge_regtab env b1 b2 =
   let regtab = Array.make env.nvar None in
   let insts = ref [] in
-  let make_phi v r1 r2 =
+  let make_phi v r1 r2 m =
     let r = fresh_reg env in
-    regtab.(v) <- Some r;
+    regtab.(v) <- Some (r, m);
     let rhs1 = { pred = b1.id; r = r1 } in
     let rhs2 = { pred = b2.id; r = r2 } in
     insts := PHI (r, [rhs1;rhs2]) :: !insts
   in
   for v=0 to env.nvar - 1 do
     match b1.regtab.(v), b2.regtab.(v) with
-    | Some r1, Some r2 ->
-      if r1 <> r2 then make_phi v r1 r2
-    | Some r1, None ->
-      make_phi v r1 (load_var env b2 v)
-    | None, Some r2 ->
-      make_phi v (load_var env b1 v) r2
+    | Some (r1, m1), Some (r2, m2) ->
+      if r1 = r2 then
+        regtab.(v) <- Some (r1, m1&&m2)
+      else
+        make_phi v r1 r2 (m1&&m2)
+    | Some (r1, m1), None ->
+      make_phi v r1 (load_var env b2 v) m1
+    | None, Some (r2, m2) ->
+      make_phi v (load_var env b1 v) r2 m2
     | None, None -> ()
   done;
   regtab, !insts
@@ -236,7 +239,12 @@ let translate_assign env (v:var) o =
   let r = fresh_reg env in
   MOV (r, o) |> emit env;
   (* TODO kill aliases *)
-  update_reg env.current_block v.lid r
+  if v.isref then
+    let m = get_mem env env.current_block v.lid in
+    STORE (m, Reg r) |> emit env;
+    update_reg env.current_block v.lid r true;
+  else
+    update_reg env.current_block v.lid r false
 
 let write_back_reg env v r =
   match get_loc env v with
@@ -247,7 +255,7 @@ let write_back_reg env v r =
 
 let write_back env v =
   match get_reg env.current_block v with
-  | Some r -> write_back_reg env v r
+  | Some (r, m) -> if not m then write_back_reg env v r
   | None -> ()
 
 let rec translate_stmt env = function
@@ -284,12 +292,12 @@ let rec translate_stmt env = function
     in
     for v=0 to env.nvar - 1 do
       match get_reg env.current_block v with
-      | Some r ->
+      | Some (r, m) ->
         let rhs_pred = { pred = pred.id; r } in
         let rhs_tail = rhs_tab.(v) in
         let r' = fresh_reg env in
         PHI (r', [rhs_pred; rhs_tail]) |> emit env;
-        update_reg env.current_block v r'
+        update_reg env.current_block v r' m
       | None -> ()
     done;
     (* actually translate loop body *)
@@ -301,12 +309,12 @@ let rec translate_stmt env = function
     env.current_block <- tail;
     for v=0 to env.nvar - 1 do
       match pred.regtab.(v), get_reg env.current_block v with
-      | Some _, Some r ->
+      | Some _, Some (r, _) ->
         patch_rhs v r
       | Some _, None ->
         let r = load_var env env.current_block v in
         patch_rhs v r
-      | None, Some r ->
+      | None, Some (r, _) ->
         write_back_reg env v r
       | None, None ->
         ()
@@ -374,6 +382,7 @@ let translate config (info : info) (prog : program) =
       let next_reg = ref config.n_reg in
       let frame_link_loc = ref (RO_Reg 0) in
       let insts = ref [] in
+      let local_start = proc.var_start.(head.depth) in
       for i=0 to np'-1 do
         match config.param_loc i with
         | RO_Reg r ->
@@ -381,7 +390,7 @@ let translate config (info : info) (prog : program) =
           incr next_reg;
           insts := MOV (r', Reg r) :: !insts;
           if i < np then
-            regtab.(proc.local_start + i) <- Some r'
+            regtab.(local_start + i) <- Some (r', false)
           else
             frame_link_loc := RO_Reg r'
         | ro ->
@@ -425,10 +434,10 @@ let translate config (info : info) (prog : program) =
       } in
       proc.body |> List.iter (translate_stmt env);
       (* write back visible outer variables and ref parameters *)
-      for i=0 to proc.local_start-1 do
+      for i=0 to local_start-1 do
         write_back env i
       done;
-      for i = proc.local_start to proc.local_start + np - 1 do
+      for i = local_start to local_start + np - 1 do
         if proc.vars.(i).isref then write_back env i
       done;
       let blocks =

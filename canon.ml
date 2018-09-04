@@ -57,7 +57,7 @@ type proc = {
   head : proc_head;
   body : stmt list;
   vars : var array;
-  local_start : int
+  var_start : int array
 }
 
 type program = {
@@ -139,6 +139,14 @@ let rec pp_stmt indent f = function
 let pp_proc f proc =
   let head = proc.head in
   fprintf f "procedure %s\n" head.name;
+  pp_print_string f "variables:";
+  proc.vars |> Array.iter begin fun (v:var) ->
+    fprintf f " %s(L%d,G%d)" v.qual_name v.lid v.gid
+  end;
+  pp_print_char f '\n';
+  pp_print_string f "scope boundaries:";
+  proc.var_start |> Array.iter (fprintf f " %d");
+  pp_print_char f '\n';
   pp_print_string f "begin\n";
   proc.body |> List.iter (pp_stmt 1 f);
   pp_print_string f "end\n";
