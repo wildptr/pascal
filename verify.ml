@@ -10,13 +10,13 @@ type env = {
 let rec convert_expr env = function
   | C_IntExpr i -> Z3.Arithmetic.Integer.mk_numeral_i env.z3 i
   | C_BoolExpr b -> Z3.Boolean.mk_val env.z3 b
-  | C_VarExpr v -> env.tab.(v.id)
-  | C_UnaryExpr (op, e) ->
+  | C_VarExpr v -> env.tab.(v.lid)
+  | C_UnaryExpr (op, e, _) ->
     let e' = convert_expr env e in
     begin match op with
       | Not -> Z3.Boolean.mk_not env.z3 e'
     end
-  | C_BinaryExpr (op, e1, e2) ->
+  | C_BinaryExpr (op, e1, e2, _) ->
     let e1' = convert_expr env e1 in
     let e2' = convert_expr env e2 in
     begin match op with

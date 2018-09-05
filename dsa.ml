@@ -16,13 +16,20 @@ type stack_entry = {
   mutable stmts : stmt list;
 }
 
+type global_env = {
+  mutable var_id : int;
+  mutable new_vars : var list;
+  alias_tab : VarSet.t array
+}
+
 type env = {
   mutable stack : stack_entry list;
   ptab : var_info_persist array;
-  mutable new_vars : var list;
   mutable var_id : int;
+  mutable new_vars : var list;
   n_old_var : int;
-  alias_tab : Set.Int.t array;
+  global : global_env;
+  alias_tab : int list array
 }
 
 let top_tab env =
@@ -37,19 +44,32 @@ let pop env =
   | { tab; stmts } :: tl -> env.stack <- tl; tab, List.rev stmts
   | _ -> failwith "pop"
 
+let new_var env f =
+  let genv = env.global in
+  let lid = env.var_id in
+  env.var_id <- lid+1;
+  let gid = genv.var_id in
+  genv.var_id <- gid+1;
+  let v = f lid gid in
+  genv.new_vars <- v :: genv.new_vars;
+  env.new_vars <- v :: env.new_vars;
+  v
+
 let new_version env id =
   let tab = top_tab env in
   let vi = tab.(id) in
   let ver = vi.ver + 1 in
   let orig = env.ptab.(id).orig in
-  let id' = env.var_id in
-  env.var_id <- env.var_id + 1;
   let cur =
     let suffix = "#" ^ string_of_int ver in
-    { orig with
-      name = orig.name ^ suffix; qual_name = orig.qual_name ^ suffix; id = id' }
+    new_var env
+      (fun lid gid ->
+         { orig with
+           name = orig.name ^ suffix;
+           qual_name = orig.qual_name ^ suffix;
+           lid;
+           gid })
   in
-  env.new_vars <- cur :: env.new_vars;
   tab.(id) <- { cur; ver };
   Hashtbl.add env.ptab.(id).cache ver cur;
   cur
@@ -66,19 +86,19 @@ let fresh_var env id =
 
 let fresh_var_alias env id =
   let v = fresh_var env id in
-  env.alias_tab.(id) |> Set.Int.iter begin fun alias_id ->
+  env.alias_tab.(id) |> List.iter begin fun alias_id ->
     fresh_var env alias_id |> ignore
   end;
   v
 
 let rec dsa_expr tab = function
   | C_IntExpr _ | C_BoolExpr _ as e -> e
-  | C_VarExpr v -> C_VarExpr tab.(v.id).cur
-  | C_UnaryExpr (op, e) -> C_UnaryExpr (op, dsa_expr tab e)
-  | C_BinaryExpr (op, e1, e2) ->
+  | C_VarExpr v -> C_VarExpr tab.(v.lid).cur
+  | C_UnaryExpr (op, e, typ) -> C_UnaryExpr (op, dsa_expr tab e, typ)
+  | C_BinaryExpr (op, e1, e2, typ) ->
     let e1' = dsa_expr tab e1 in
     let e2' = dsa_expr tab e2 in
-    C_BinaryExpr (op, e1', e2')
+    C_BinaryExpr (op, e1', e2', typ)
 
 (*
 let rec mark_uses tab = function
@@ -106,7 +126,7 @@ let emit env s =
 let rec dsa_stmt env = function
   | C_AssignStmt (lhs, rhs) ->
     let rhs' = dsa_expr (top_tab env) rhs in
-    let lhs' = fresh_var_alias env lhs.id in
+    let lhs' = fresh_var_alias env lhs.lid in
     C_AssignStmt (lhs', rhs') |> emit env
   | C_AssertStmt e ->
     C_AssertStmt (dsa_expr (top_tab env) e) |> emit env
@@ -148,7 +168,7 @@ let rec dsa_stmt env = function
     let defs =
       body |> List.fold_left begin fun set stmt ->
         match stmt with
-        | C_AssignStmt (lhs, _) -> Set.Int.add lhs.id set
+        | C_AssignStmt (lhs, _) -> Set.Int.add lhs.lid set
         | _ -> set
       end Set.Int.empty
     in
@@ -156,23 +176,34 @@ let rec dsa_stmt env = function
     C_AssumeStmt (dsa_expr tab inv) |> emit env;
     List.iter (dsa_stmt env) body;
     let cond' = dsa_expr tab cond in
-    C_AssertStmt (C_BinaryExpr (Imp, C_UnaryExpr (Not, cond'), dsa_expr tab inv)) |> emit env;
+    C_AssertStmt (C_BinaryExpr (Imp, C_UnaryExpr (Not, cond', BoolType), dsa_expr tab inv, BoolType)) |> emit env;
     C_AssumeStmt cond' |> emit env
   | C_CallStmt (vars, proc, args) ->
     let tab = top_tab env in
     let args' = args |> Array.map (dsa_expr tab) in
-    let vars' = vars |> Array.map (fun (v:var) -> fresh_var_alias env v.id) in
+    let vars' = vars |> Array.map (fun (v:var) -> fresh_var_alias env v.lid) in
     C_CallStmt (vars', proc, args') |> emit env
 
-let dsa_proc alias_tab (proc : proc) =
+let dsa_proc (genv : global_env) (proc : proc) =
   let n_old_var = Array.length proc.vars in
   let tab = proc.vars |> Array.map (fun v -> { cur = v; ver = 0 }) in
   let ptab =
     proc.vars |> Array.map (fun v -> { orig = v; cache = Hashtbl.create 0 })
   in
+  let alias_tab =
+    Array.map
+      (fun aliases ->
+         aliases |> VarSet.enum |> List.of_enum |> List.map (fun v -> v.lid))
+      genv.alias_tab
+  in
   let env =
     { stack = [{ tab; stmts=[] }];
-      ptab; new_vars = []; var_id = n_old_var; n_old_var; alias_tab }
+      ptab;
+      new_vars = [];
+      var_id = n_old_var;
+      n_old_var;
+      global = genv;
+      alias_tab }
   in
   proc.body |> List.iter (dsa_stmt env);
   let _, body = pop env in
@@ -187,3 +218,15 @@ let dsa_proc alias_tab (proc : proc) =
     else [||]
   in
   { proc with body; vars }
+
+let dsa alias_tab prog =
+  let genv =
+    { var_id = Array.length prog.vars;
+      new_vars = [];
+      alias_tab }
+  in
+  let procs = prog.procs |> Array.map (dsa_proc genv) in
+  let vars =
+    Array.concat [prog.vars; genv.new_vars |> List.rev |> Array.of_list]
+  in
+  { procs; vars }
