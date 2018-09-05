@@ -53,6 +53,7 @@ let new_var env f =
   let v = f lid gid in
   genv.new_vars <- v :: genv.new_vars;
   env.new_vars <- v :: env.new_vars;
+  Printf.eprintf "new variable: %s\n" v.qual_name;
   v
 
 let new_version env id =
@@ -86,7 +87,9 @@ let fresh_var env id =
 
 let fresh_var_alias env id =
   let v = fresh_var env id in
+  Printf.eprintf "assign %s\n" env.ptab.(id).orig.qual_name;
   env.alias_tab.(id) |> List.iter begin fun alias_id ->
+    Printf.eprintf "havoc %s\n" env.ptab.(alias_id).orig.qual_name;
     fresh_var env alias_id |> ignore
   end;
   v
@@ -191,10 +194,12 @@ let dsa_proc (genv : global_env) (proc : proc) =
     proc.vars |> Array.map (fun v -> { orig = v; cache = Hashtbl.create 0 })
   in
   let alias_tab =
-    Array.map
-      (fun aliases ->
-         aliases |> VarSet.enum |> List.of_enum |> List.map (fun v -> v.lid))
-      genv.alias_tab
+    Array.init n_old_var
+      (fun lid ->
+         let gid = proc.vars.(lid).gid in
+         genv.alias_tab.(gid) |> VarSet.enum |> List.of_enum |> List.filter_map
+           (fun v ->
+              if Map.Int.mem gid proc.var_id_map then Some v.lid else None))
   in
   let env =
     { stack = [{ tab; stmts=[] }];

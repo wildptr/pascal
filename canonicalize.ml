@@ -218,7 +218,10 @@ let rec canon_proc env (proc : ast_proc) =
     { head;
       body = List.rev canon_env.stmts;
       vars;
-      var_start = var_start |> List.rev |> Array.of_list }
+      var_start = var_start |> List.rev |> Array.of_list;
+      var_id_map =
+        Array.fold_left (fun m v -> Map.Int.add v.gid v.lid m)
+          Map.Int.empty vars }
   in
   { env with
     all_vars = env'.all_vars; var_gid = env'.var_gid; proc_id = env'.proc_id },

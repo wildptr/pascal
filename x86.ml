@@ -155,5 +155,6 @@ let emit_block f (blk:block) =
   fprintf f "%s:\n" blk.name;
   blk.insts |> List.iter (emit_inst f)
 
-let emit_asm f proc =
+let emit_asm f (proc : abs_proc) =
+  fprintf f "%s:\n" proc.name;
   proc.blocks |> Array.iter (emit_block f)

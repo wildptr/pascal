@@ -49,7 +49,7 @@ let type_of_expr = function
 type param = {
   byref : bool;
   name : string;
-  typ : typ;
+  typ : typ
 }
 
 type proc_head = {
@@ -73,7 +73,8 @@ type proc = {
   head : proc_head;
   body : stmt list;
   vars : var array;
-  var_start : int array
+  var_start : int array;
+  var_id_map : int Map.Int.t (* gid -> lid *)
 }
 
 type program = {

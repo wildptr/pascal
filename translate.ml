@@ -433,7 +433,7 @@ let translate config (info : info) (prog : program) =
           let aliases =
             info.alias_tab.(v.gid) |> VarSet.enum |> List.of_enum |>
             List.filter_map begin fun v ->
-              if v.proc_id = head.id then Some v.lid else None
+              if Map.Int.mem v.gid proc.var_id_map then Some v.lid else None
             end
           in
           { loc; visible = info.vis_tab.(v.gid); aliases }

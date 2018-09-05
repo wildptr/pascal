@@ -30,6 +30,9 @@ let rec convert_expr env = function
       | Gt -> Z3.Arithmetic.mk_gt env.z3 e1' e2'
       | LtEq -> Z3.Arithmetic.mk_le env.z3 e1' e2'
       | Imp -> Z3.Boolean.mk_implies env.z3 e1' e2'
+      | And -> Z3.Boolean.mk_and env.z3 [e1';e2']
+      | Or -> Z3.Boolean.mk_or env.z3 [e1';e2']
+      | _ -> failwith "not implemented"
     end
 
 let rec wp env s q =
@@ -59,7 +62,6 @@ let verify_proc proc =
         match var.typ with
         | IntType -> int_sort
         | BoolType -> bool_sort
-        | _ -> failwith "not implemented"
       in
       Z3.Expr.mk_const_s z3 var.name sort
     end
