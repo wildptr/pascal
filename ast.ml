@@ -1,4 +1,6 @@
-type ast_type = string
+type ast_type =
+  | A_IdentType of string
+  | A_ArrayType of int * ast_type
 
 type var_decl = string list * ast_type
 
@@ -19,6 +21,7 @@ type ast_expr =
   | A_BoolExpr of bool
   | A_IdentExpr of string
   | A_BinaryExpr of binary_op * ast_expr * ast_expr
+  | A_IndexExpr of ast_expr * ast_expr
 
 type ast_stmt =
   | A_CompStmt of ast_stmt list

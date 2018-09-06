@@ -39,6 +39,8 @@ rule read = parse
   | "<"                 { Lt }
   | "="                 { Eq }
   | ">"                 { Gt }
+  | "["                 { LBrack }
+  | "]"                 { RBrack }
   | "and"               { AND }
   | "array"             { ARRAY }
   | "assert"            { ASSERT }

@@ -27,6 +27,7 @@ let rec passify_stmt env = function
   | C_RepeatStmt _ -> failwith "REPEAT statement"
   | C_CallStmt (vars, proc, args) ->
     ()
+  | C_StoreStmt _ -> failwith "STORE statement"
 
 let passify_proc (proc : proc) =
   let env = { stmts = [] } in

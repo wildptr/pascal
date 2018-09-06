@@ -102,6 +102,11 @@ let rec dsa_expr tab = function
     let e1' = dsa_expr tab e1 in
     let e2' = dsa_expr tab e2 in
     C_BinaryExpr (op, e1', e2', typ)
+  | C_TernaryExpr (op, e1, e2, e3, typ) ->
+    let e1' = dsa_expr tab e1 in
+    let e2' = dsa_expr tab e2 in
+    let e3' = dsa_expr tab e3 in
+    C_TernaryExpr (op, e1', e2', e3', typ)
 
 (*
 let rec mark_uses tab = function
@@ -125,6 +130,20 @@ let rec mark_uses_stmt tab = function
 let emit env s =
   let top = List.hd env.stack in
   top.stmts <- s :: top.stmts
+
+let rec convert_store_stmt env base index value =
+  let tab = top_tab env in
+  let base_dsa = dsa_expr tab base in
+  let index_dsa = dsa_expr tab index in
+  let value_dsa = dsa_expr tab value in
+  let value' =
+    C_TernaryExpr (Store, base_dsa, index_dsa, value_dsa, type_of_expr base)
+  in
+  match base with
+  | C_VarExpr v -> v, value'
+  | C_BinaryExpr (Select, base', index', _) ->
+    convert_store_stmt env base' index' value'
+  | _ -> failwith "convert_store_stmt"
 
 let rec dsa_stmt env = function
   | C_AssignStmt (lhs, rhs) ->
@@ -186,6 +205,13 @@ let rec dsa_stmt env = function
     let args' = args |> Array.map (dsa_expr tab) in
     let vars' = vars |> Array.map (fun (v:var) -> fresh_var_alias env v.lid) in
     C_CallStmt (vars', proc, args') |> emit env
+  | C_StoreStmt (base, index, value) ->
+    (* a[i][j] := b *)
+    (* a := store(a, i, store(a[i], j, b)) *)
+    let lhs, rhs = convert_store_stmt env base index value in
+    let lhs' = fresh_var_alias env lhs.lid in
+    C_AssignStmt (lhs', rhs) |> emit env
+    (* base' = store base index value *)
 
 let dsa_proc (genv : global_env) (proc : proc) =
   let n_old_var = Array.length proc.vars in
@@ -198,8 +224,7 @@ let dsa_proc (genv : global_env) (proc : proc) =
       (fun lid ->
          let gid = proc.vars.(lid).gid in
          genv.alias_tab.(gid) |> VarSet.enum |> List.of_enum |> List.filter_map
-           (fun v ->
-              if Map.Int.mem gid proc.var_id_map then Some v.lid else None))
+           (fun v -> Map.Int.Exceptionless.find v.gid proc.var_id_map))
   in
   let env =
     { stack = [{ tab; stmts=[] }];

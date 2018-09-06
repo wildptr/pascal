@@ -36,6 +36,6 @@ let () =
   abs_prog.procs |> Array.iter begin fun proc ->
     proc
     |> LowerX86.lower_proc
-    |> RegAllocX86.allocate_registers
+(*     |> RegAllocX86.allocate_registers *)
     |> X86.emit_asm Format.std_formatter
   end

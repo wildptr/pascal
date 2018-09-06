@@ -16,10 +16,15 @@ type canon_env = {
 let emit env s =
   env.stmts <- s :: env.stmts
 
-let resolve_type = function
-  | "integer" -> IntType
-  | "boolean" -> BoolType
-  | name -> failwith ("unknown type: "^name)
+let rec resolve_type = function
+  | A_IdentType name ->
+    begin match name with
+      | "integer" -> IntType
+      | "boolean" -> BoolType
+      | name -> failwith ("unknown type: "^name)
+    end
+  | A_ArrayType (n, t) ->
+    ArrayType (resolve_type t, n)
 
 let lookup_var symtab name =
   match M.find name symtab with
@@ -30,10 +35,6 @@ let lookup_proc symtab name =
   match M.find name symtab with
   | Proc p -> p
   | _ -> failwith ("not a procedure: " ^ name)
-
-let canon_lvalue env = function
-  | A_IdentExpr name -> lookup_var env.symtab name
-  | _ -> failwith "not an l-value"
 
 let check_type e t =
   if type_of_expr e <> t then
@@ -68,6 +69,7 @@ let rec canon_expr env = function
           | BoolType ->
             check_type e2' BoolType;
             And, BoolType
+          | _ -> failwith "type error"
         end
       | A_Or ->
         begin match type_of_expr e1' with
@@ -77,6 +79,7 @@ let rec canon_expr env = function
           | BoolType ->
             check_type e2' BoolType;
             Or, BoolType
+          | _ -> failwith "type error"
         end
       | A_Eq ->
         check_type e2' (type_of_expr e1');
@@ -102,13 +105,34 @@ let rec canon_expr env = function
         LtEq, BoolType
     in
     C_BinaryExpr (op', e1', e2', typ)
+  | A_IndexExpr (base, index) ->
+    let base' = canon_expr env base in
+    let typ =
+      match type_of_expr base' with
+      | ArrayType (elt, _) -> elt
+      | _ -> failwith "type error"
+    in
+    let index' = canon_expr env index in
+    check_type index' IntType;
+    C_BinaryExpr (Select, base', index', typ)
 
 let rec canon_stmt env = function
   | A_CompStmt l -> l |> List.iter (canon_stmt env)
   | A_AssignStmt (lhs, rhs) ->
-    let lhs' = canon_lvalue env lhs in
     let rhs' = canon_expr env rhs in
-    emit env (C_AssignStmt (lhs', rhs'))
+    begin match lhs with
+      | A_IdentExpr name ->
+        let v = lookup_var env.symtab name in
+        emit env (C_AssignStmt (v, rhs'))
+      | A_IndexExpr _ ->
+        let [@warning "-8"] C_BinaryExpr (Select, base', index', typ) =
+          canon_expr env lhs
+        in
+        if typ <> type_of_expr rhs' then
+          failwith "type error";
+        emit env (C_StoreStmt (base', index', rhs'))
+      | _ -> failwith "canon_stmt: invalid assignment"
+    end
   | A_AssertStmt e ->
     emit env (C_AssertStmt (canon_expr env e))
   | A_IfStmt (cond, bodyT, bodyF) ->

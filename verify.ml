@@ -32,7 +32,14 @@ let rec convert_expr env = function
       | Imp -> Z3.Boolean.mk_implies env.z3 e1' e2'
       | And -> Z3.Boolean.mk_and env.z3 [e1';e2']
       | Or -> Z3.Boolean.mk_or env.z3 [e1';e2']
-      | _ -> failwith "not implemented"
+      | Select -> Z3.Z3Array.mk_select env.z3 e1' e2'
+    end
+  | C_TernaryExpr (op, e1, e2, e3, _) ->
+    let e1' = convert_expr env e1 in
+    let e2' = convert_expr env e2 in
+    let e3' = convert_expr env e3 in
+    begin match op with
+      | Store -> Z3.Z3Array.mk_store env.z3 e1' e2' e3'
     end
 
 let rec wp env s q =
@@ -58,11 +65,13 @@ let verify_proc proc =
   let tab =
     Array.init (Array.length proc.vars) begin fun i ->
       let var = proc.vars.(i) in
-      let sort =
-        match var.typ with
+      let rec sort_of_type = function
         | IntType -> int_sort
         | BoolType -> bool_sort
+        | ArrayType (typ, _) ->
+          Z3.Z3Array.mk_sort z3 int_sort (sort_of_type typ)
       in
+      let sort = sort_of_type var.typ in
       Z3.Expr.mk_const_s z3 var.name sort
     end
   in

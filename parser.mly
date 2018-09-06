@@ -15,6 +15,8 @@ open Ast
 %token Lt
 %token Eq
 %token Gt
+%token LBrack
+%token RBrack
 %token <string> Ident
 %token <int> Int
 %token ColonEq
@@ -85,7 +87,8 @@ ident_list:
   separated_nonempty_list(Comma, Ident) {$1}
 
 typ:
-  Ident {$1}
+  | Ident { A_IdentType $1 }
+  | ARRAY LBrack n=Int RBrack OF t=typ { A_ArrayType (n, t) }
 
 stmt:
   | lvalue ColonEq expr { A_AssignStmt ($1, $3) }
@@ -110,6 +113,7 @@ factor:
   | FALSE { A_BoolExpr false }
   | Ident { A_IdentExpr $1 }
   | LParen expr RParen {$2}
+  | factor LBrack expr RBrack { A_IndexExpr ($1, $3) }
 
 term_op:
   | Star        { A_Mul }
@@ -147,10 +151,10 @@ proc_def:
   {{ name; params; block }}
 
 param_decl:
-  boption(VAR) ident_list Colon Ident { $1, $2, $4 }
+  boption(VAR) ident_list Colon Ident { $1, $2, A_IdentType $4 }
 
-lvalue:
-  Ident { A_IdentExpr $1 }
+lvalue: | Ident { A_IdentExpr $1 }
+  | lvalue LBrack expr RBrack { A_IndexExpr ($1, $3) }
 
 expr_list: separated_list(Comma, expr) {$1}
 

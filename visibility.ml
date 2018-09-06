@@ -13,6 +13,8 @@ let rec scan_expr env = function
       env.tab.(v.gid) <- true
   | C_UnaryExpr (_, e, _) -> scan_expr env e
   | C_BinaryExpr (_, e1, e2, _) -> scan_expr env e1; scan_expr env e2
+  | C_TernaryExpr (_, e1, e2, e3, _) ->
+    scan_expr env e1; scan_expr env e2; scan_expr env e3
 
 let rec scan_stmt env = function
   | C_AssignStmt (v, e) ->
@@ -38,6 +40,10 @@ let rec scan_stmt env = function
         env.tab.(v.gid) <- true
       else scan_expr env e
     end
+  | C_StoreStmt (e1, e2, e3) ->
+    scan_expr env e1;
+    scan_expr env e2;
+    scan_expr env e3
 
 let scan_proc tab proc =
   let env = { tab; proc_id = proc.head.id } in

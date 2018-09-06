@@ -3,6 +3,26 @@ open Batteries
 type typ =
   | IntType
   | BoolType
+  | ArrayType of typ * int
+
+let elt_type_of = function
+  | ArrayType (typ, _) -> typ
+  | _ -> failwith "elt_type_of"
+
+let rec align_of_type = function
+  | IntType -> 4
+  | BoolType -> 1
+  | ArrayType (typ, _) -> align_of_type typ
+
+let rec size_of_type = function
+  | IntType -> 4
+  | BoolType -> 1
+  | ArrayType (typ, n) -> size_of_type typ * n (* TODO: align *)
+
+let is_aggregate_type = function
+  | IntType -> false
+  | BoolType -> false
+  | ArrayType _ -> true
 
 type var = {
   name : string;
@@ -30,7 +50,10 @@ type unary_op =
 type binary_op =
   | Add | Sub | Mul | And | Or | LogAnd | LogOr
   | Eq | NotEq | Lt | GtEq | Gt | LtEq
-  | Imp
+  | Imp | Select
+
+type ternary_op =
+  | Store
 
 type expr =
   | C_IntExpr of int
@@ -38,6 +61,7 @@ type expr =
   | C_VarExpr of var
   | C_UnaryExpr of unary_op * expr * typ
   | C_BinaryExpr of binary_op * expr * expr * typ
+  | C_TernaryExpr of ternary_op * expr * expr * expr * typ
 
 let type_of_expr = function
   | C_IntExpr _ -> IntType
@@ -45,6 +69,7 @@ let type_of_expr = function
   | C_VarExpr v -> v.typ
   | C_UnaryExpr (_, _, typ) -> typ
   | C_BinaryExpr (_, _, _, typ) -> typ
+  | C_TernaryExpr (_, _, _, _, typ) -> typ
 
 type param = {
   byref : bool;
@@ -68,6 +93,7 @@ type stmt =
   | C_IfStmt of expr * stmt list * stmt list
   | C_RepeatStmt of expr * stmt list * expr
   | C_CallStmt of var array * proc_head * expr array
+  | C_StoreStmt of expr * expr * expr
 
 type proc = {
   head : proc_head;
@@ -102,6 +128,7 @@ let string_of_binary_op = function
   | Gt -> ">"
   | LtEq -> "<="
   | Imp -> "=>"
+  | _ -> failwith "string_of_binary_op"
 
 let rec pp_expr f = function
   | C_IntExpr i -> pp_print_int f i
@@ -110,7 +137,18 @@ let rec pp_expr f = function
   | C_UnaryExpr (op, e, _) ->
     fprintf f "(%s %a)" (string_of_unary_op op) pp_expr e
   | C_BinaryExpr (op, e1, e2, _) ->
-    fprintf f "(%a %s %a)" pp_expr e1 (string_of_binary_op op) pp_expr e2
+    begin match op with
+      | Select ->
+        fprintf f "%a[%a]" pp_expr e1 pp_expr e2
+      | _ ->
+        fprintf f "(%a %s %a)" pp_expr e1 (string_of_binary_op op) pp_expr e2
+    end
+  | C_TernaryExpr (op, e1, e2, e3, _) ->
+    let s =
+      match op with
+      | Store -> "store"
+    in
+    fprintf f "%s(%a, %a, %a)" s pp_expr e1 pp_expr e2 pp_expr e3
 
 let pp_list pp f = function
   | [] -> ()
@@ -156,6 +194,9 @@ let rec pp_stmt indent f = function
     if Array.length vars > 0 then
       fprintf f "%a := " (pp_array pp_var) vars;
     fprintf f "%s(%a)\n" proc.name (pp_array pp_expr) args
+  | C_StoreStmt (base, index, value) ->
+    fprintf f "%a%a[%a] := %a\n" pp_indent indent pp_expr base pp_expr index
+      pp_expr value
 
 let pp_proc f proc =
   let head = proc.head in
