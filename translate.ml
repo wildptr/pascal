@@ -30,7 +30,7 @@ type config = {
 
 type info = {
   vis_tab : bool array;
-  alias_tab : VarSet.t array
+  alias_tab : var list array
 }
 
 type path =
@@ -112,13 +112,15 @@ let is_visible env v =
 let get_aliases env v =
   env.var_info.(v).aliases
 
-let get_addr env b v =
-  let (base, off) = get_mem env b v in
+let mem_to_opd env b (base, off) =
   match base with
   | Some base ->
     let r = fresh_reg env in
     (ALU2 (ADD, r, base, Imm off) |> emit_block b; Reg r)
   | None -> Imm off
+
+let get_addr env b v =
+  mem_to_opd env b (get_mem env b v)
 
 let to_reg env = function
   | Reg r -> r
@@ -229,16 +231,14 @@ let rec translate_expr env = function
     failwith "not implemented"
 
 and translate_elt_addr env base index =
-  let root =
-    let rec find_root = function
-      | C_VarExpr v -> v
-      | C_BinaryExpr (Select, e, _, _) -> find_root e
-      | _ -> failwith "find_root"
-    in
-    find_root base
+  let base_addr =
+    match base with
+    | C_VarExpr v -> get_addr env env.current_block v.lid
+    | C_BinaryExpr (Select, base', index', _) ->
+      translate_elt_addr env base' index' |> mem_to_opd env env.current_block
+    | _ -> failwith ""
   in
   let elt_size = type_of_expr base |> elt_type_of |> size_of_type in
-  let base_addr = get_addr env env.current_block root.lid in
   let i = translate_expr env index |> to_reg env in
   let off = fresh_reg env in
   MUL (off, i, imm_opd_i elt_size) |> emit env;
@@ -416,7 +416,6 @@ let translate config (info : info) (prog : program) =
         let align = align_of_type v.typ in
         let off = (stack_top.(v.proc_id) - size) land (-align) in
         stack_top.(v.proc_id) <- off;
-        Printf.eprintf "%s at %d,%d\n" v.qual_name vd off;
         loctab.(v.gid) <- Some (vd, off)
       end
     in
@@ -483,15 +482,14 @@ let translate config (info : info) (prog : program) =
               if v.isref then Indirect (l, 0) else l
             end
           in
-          begin match loc with
+          (*begin match loc with
             | Some loc ->
               Format.eprintf "%s at %a@." v.qual_name pp_path loc
             | None ->
               Printf.eprintf "%s in register\n" v.qual_name
-          end;
+          end;*)
           let aliases =
-            info.alias_tab.(v.gid) |> VarSet.enum |> List.of_enum |>
-            List.filter_map
+            info.alias_tab.(v.gid) |> List.filter_map
               (fun v -> Map.Int.Exceptionless.find v.gid proc.var_id_map)
           in
           { loc;

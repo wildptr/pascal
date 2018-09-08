@@ -19,7 +19,7 @@ type stack_entry = {
 type global_env = {
   mutable var_id : int;
   mutable new_vars : var list;
-  alias_tab : VarSet.t array
+  alias_tab : var list array
 }
 
 type env = {
@@ -94,18 +94,38 @@ let fresh_var_alias env id =
   end;
   v
 
-let rec dsa_expr tab = function
+let emit env s =
+  let top = List.hd env.stack in
+  top.stmts <- s :: top.stmts
+
+let gen_range_assert env base index =
+  let [@warning "-8"] ArrayType (_, len) = type_of_expr base in
+  let e =
+    C_BinaryExpr
+      (And,
+       C_BinaryExpr (GtEq, index, C_IntExpr 0, BoolType),
+       C_BinaryExpr (Lt, index, C_IntExpr len, BoolType),
+       BoolType)
+  in
+  C_AssertStmt e |> emit env;
+  C_AssumeStmt e |> emit env
+
+let rec dsa_expr env = function
   | C_IntExpr _ | C_BoolExpr _ as e -> e
-  | C_VarExpr v -> C_VarExpr tab.(v.lid).cur
-  | C_UnaryExpr (op, e, typ) -> C_UnaryExpr (op, dsa_expr tab e, typ)
+  | C_VarExpr v -> C_VarExpr (top_tab env).(v.lid).cur
+  | C_UnaryExpr (op, e, typ) -> C_UnaryExpr (op, dsa_expr env e, typ)
   | C_BinaryExpr (op, e1, e2, typ) ->
-    let e1' = dsa_expr tab e1 in
-    let e2' = dsa_expr tab e2 in
+    let e1' = dsa_expr env e1 in
+    let e2' = dsa_expr env e2 in
+    begin match op with
+      | Select -> gen_range_assert env e1' e2'
+      | _ -> ()
+    end;
     C_BinaryExpr (op, e1', e2', typ)
   | C_TernaryExpr (op, e1, e2, e3, typ) ->
-    let e1' = dsa_expr tab e1 in
-    let e2' = dsa_expr tab e2 in
-    let e3' = dsa_expr tab e3 in
+    let e1' = dsa_expr env e1 in
+    let e2' = dsa_expr env e2 in
+    let e3' = dsa_expr env e3 in
     C_TernaryExpr (op, e1', e2', e3', typ)
 
 (*
@@ -127,15 +147,11 @@ let rec mark_uses_stmt tab = function
     mark_uses tab cond
 *)
 
-let emit env s =
-  let top = List.hd env.stack in
-  top.stmts <- s :: top.stmts
-
 let rec convert_store_stmt env base index value =
-  let tab = top_tab env in
-  let base_dsa = dsa_expr tab base in
-  let index_dsa = dsa_expr tab index in
-  let value_dsa = dsa_expr tab value in
+  let base_dsa = dsa_expr env base in
+  let index_dsa = dsa_expr env index in
+  let value_dsa = dsa_expr env value in
+  gen_range_assert env base_dsa index_dsa;
   let value' =
     C_TernaryExpr (Store, base_dsa, index_dsa, value_dsa, type_of_expr base)
   in
@@ -147,15 +163,15 @@ let rec convert_store_stmt env base index value =
 
 let rec dsa_stmt env = function
   | C_AssignStmt (lhs, rhs) ->
-    let rhs' = dsa_expr (top_tab env) rhs in
+    let rhs' = dsa_expr env rhs in
     let lhs' = fresh_var_alias env lhs.lid in
     C_AssignStmt (lhs', rhs') |> emit env
   | C_AssertStmt e ->
-    C_AssertStmt (dsa_expr (top_tab env) e) |> emit env
+    C_AssertStmt (dsa_expr env e) |> emit env
   | C_AssumeStmt e ->
-    C_AssumeStmt (dsa_expr (top_tab env) e) |> emit env
+    C_AssumeStmt (dsa_expr env e) |> emit env
   | C_IfStmt (cond, bodyT, bodyF) ->
-    let cond' = dsa_expr (top_tab env) cond in
+    let cond' = dsa_expr env cond in
     push env;
     bodyT |> List.iter (dsa_stmt env);
     let tabT, bodyT' = pop env in
@@ -185,8 +201,7 @@ let rec dsa_stmt env = function
     let bodyF' = bodyF' @ (List.rev !assignsF) in
     C_IfStmt (cond', bodyT', bodyF') |> emit env
   | C_RepeatStmt (inv, body, cond) ->
-    let tab = top_tab env in
-    C_AssertStmt (dsa_expr tab inv) |> emit env;
+    C_AssertStmt (dsa_expr env inv) |> emit env;
     let defs =
       body |> List.fold_left begin fun set stmt ->
         match stmt with
@@ -195,14 +210,13 @@ let rec dsa_stmt env = function
       end Set.Int.empty
     in
     defs |> Set.Int.iter (fun i -> fresh_var env i |> ignore);
-    C_AssumeStmt (dsa_expr tab inv) |> emit env;
+    C_AssumeStmt (dsa_expr env inv) |> emit env;
     List.iter (dsa_stmt env) body;
-    let cond' = dsa_expr tab cond in
-    C_AssertStmt (C_BinaryExpr (Imp, C_UnaryExpr (Not, cond', BoolType), dsa_expr tab inv, BoolType)) |> emit env;
+    let cond' = dsa_expr env cond in
+    C_AssertStmt (C_BinaryExpr (Imp, C_UnaryExpr (Not, cond', BoolType), dsa_expr env inv, BoolType)) |> emit env;
     C_AssumeStmt cond' |> emit env
   | C_CallStmt (vars, proc, args) ->
-    let tab = top_tab env in
-    let args' = args |> Array.map (dsa_expr tab) in
+    let args' = args |> Array.map (dsa_expr env) in
     let vars' = vars |> Array.map (fun (v:var) -> fresh_var_alias env v.lid) in
     C_CallStmt (vars', proc, args') |> emit env
   | C_StoreStmt (base, index, value) ->
@@ -222,8 +236,8 @@ let dsa_proc (genv : global_env) (proc : proc) =
   let alias_tab =
     Array.init n_old_var
       (fun lid ->
-         let gid = proc.vars.(lid).gid in
-         genv.alias_tab.(gid) |> VarSet.enum |> List.of_enum |> List.filter_map
+         let v = proc.vars.(lid) in
+         genv.alias_tab.(v.gid) |> List.filter_map
            (fun v -> Map.Int.Exceptionless.find v.gid proc.var_id_map))
   in
   let env =

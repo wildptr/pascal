@@ -12,8 +12,7 @@ let rec passify_stmt env = function
   | C_AssignStmt (lhs, rhs) ->
     emit env (P_Assume (C_BinaryExpr (Eq, C_VarExpr lhs, rhs, BoolType)))
   | C_AssertStmt e ->
-    emit env (P_Assert e);
-    emit env (P_Assume e)
+    emit env (P_Assert e)
   | C_AssumeStmt e ->
     emit env (P_Assume e)
   | C_IfStmt (cond, bodyT, bodyF) ->

@@ -4,6 +4,12 @@ open Inst
 
 module S = Set.Int
 
+exception Break
+
+type color_constraint =
+  | Distinct of int list
+  | Same of int
+
 module Machine (M : MachineType) = struct
 
   module MIR = OfInstType(M.SpecInst)
@@ -66,8 +72,10 @@ module Machine (M : MachineType) = struct
     in
 
     let g = G.create ~size:nr () in
+    let m = G.create ~size:nr () in
     for i=0 to nr-1 do
-      G.add_vertex g i
+      G.add_vertex g i;
+      G.add_vertex m i
     done;
 
     let connect defs live =
@@ -83,11 +91,17 @@ module Machine (M : MachineType) = struct
 
     for i=0 to n-1 do
       let live_in_i =
-      List.fold_right begin fun inst live ->
-        let def = defs inst in
-        connect def live;
-        S.union (S.diff live def) (uses inst)
-      end blocks.(i).insts live_out.(i)
+        List.fold_right begin fun inst live ->
+          let def = defs inst in
+          connect def live;
+          begin match inst with
+            | MOV (d, Reg s) ->
+              Printf.eprintf "move-related: %d -- %d\n" d s;
+              G.add_edge m d s
+            | _ -> ()
+          end;
+          S.union (S.diff live def) (uses inst)
+        end blocks.(i).insts live_out.(i)
       in
       assert (S.equal live_in_i live_in.(i));
       pred.(i) |> List.iter begin fun j ->
@@ -98,50 +112,113 @@ module Machine (M : MachineType) = struct
 
     (* register allocation *)
 
-    let neighbors = Array.make nr [] in
-    for i=M.n_reg to nr-1 do
-      neighbors.(i) <- G.succ g i
-    done;
+    let move_related i =
+      G.out_degree m i > 0
+    in
 
-    let color_order = Array.make nr 0 in
+    let low_degree i =
+      G.out_degree g i < M.n_reg_avail
+    in
+
+    let color_order = Array.make nr (0, Distinct []) in
     begin
       let p = ref nr in
-      let removed = Array.make nr false in
-      let rec loop old_p =
-        for i=0 to nr-1 do
-          if not removed.(i) && G.out_degree g i < M.n_reg_avail then begin
-            decr p;
-            color_order.(!p) <- i;
-            G.remove_vertex g i;
-            removed.(i) <- true
-          end
-        done;
-        if !p < old_p then loop !p
+      let nodes = ref Set.Int.empty in
+      for i=0 to nr-1 do
+        nodes := Set.Int.add i !nodes
+      done;
+      let remove_node i c =
+        decr p;
+        color_order.(!p) <- (i, c);
+        G.remove_vertex g i;
+        G.remove_vertex m i;
+        nodes := Set.Int.remove i !nodes
       in
-      loop nr;
-      while !p > 0 do
-        for i=0 to nr-1 do
-          if not removed.(i) then (decr p; color_order.(!p) <- i)
-        done
-      done
+      (* simplify *)
+      let rec simplify () =
+        let old_p = !p in
+        !nodes |> Set.Int.iter begin fun i ->
+          if low_degree i && not (move_related i) then
+            remove_node i (Distinct (G.succ g i))
+        end;
+        if !p < old_p then simplify ()
+      in
+      (* coalesce *)
+      (* George's strategy:
+         Nodes i and j can be coalesced if, for every neighbor k of i, either k
+         already interferes with j or k is of insignificant degree. *)
+      let coalesce () =
+        let changed = ref false in
+        let rec loop () =
+          try
+            G.iter_edges begin fun i j ->
+              begin
+                try
+                  G.iter_succ begin fun k ->
+                    if not (G.mem_edge g k j || low_degree k) then
+                      raise Break
+                  end g i;
+                with Break -> () (* cannot coalesce *)
+              end;
+              Printf.printf "coalesce %d %d\n" i j;
+              remove_node j (Same i);
+              changed := true;
+              raise Break
+            end m;
+          with Break -> loop ()
+        in
+        loop ();
+        !changed
+      in
+      let freeze () =
+        try
+          G.iter_vertex begin fun i ->
+            if move_related i && low_degree i then begin
+              Printf.eprintf "freeze %d\n" i;
+              G.iter_succ (G.remove_edge g i) g i;
+              raise Break
+            end
+          end g;
+          false
+        with Break -> true
+      in
+      let spill () =
+        let i = Set.Int.choose !nodes in
+        remove_node i (Distinct (G.succ g i))
+      in
+      let rec loop () =
+        simplify ();
+        if !p > 0 then begin
+          if coalesce () then loop ();
+          if freeze () then loop ();
+          if !p > 0 then begin
+            spill ();
+            if !p > 0 then loop ()
+          end
+        end
+      in
+      loop ()
     end;
 
     let color = Array.make nr (-1) in
     (* pre-color physical registers *)
     for i=0 to M.n_reg-1 do color.(i) <- i done;
-    for i=M.n_reg to nr-1 do
-      let f = ref M.reg_mask in
-      neighbors.(i) |> List.iter begin fun j ->
-        let c = color.(j) in
-        if c >= 0 then f := !f lor (1 lsl c)
-      end;
-      let rec loop c =
-        if c = M.n_reg then -1
-        else if !f land (1 lsl c) = 0 then c
-        else loop (c+1)
-      in
-      color.(i) <- loop 0
-    done;
+    color_order |> Array.iter begin fun (i, c) ->
+      match c with
+      | Distinct l ->
+        let f =
+          List.fold_left (fun f j -> f lor (1 lsl color.(j)))
+            M.reg_mask l
+        in
+        let rec loop c =
+          if f land (1 lsl c) = 0 then c
+          else loop (c+1)
+        in
+        color.(i) <- loop 0
+      | Same j ->
+        assert (color.(j) >= 0);
+        color.(i) <- color.(j)
+    end;
 
     let blocks =
       proc.blocks |> Array.map begin fun blk ->

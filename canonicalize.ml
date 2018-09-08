@@ -134,7 +134,9 @@ let rec canon_stmt env = function
       | _ -> failwith "canon_stmt: invalid assignment"
     end
   | A_AssertStmt e ->
-    emit env (C_AssertStmt (canon_expr env e))
+    let e' = canon_expr env e in
+    emit env (C_AssertStmt e');
+    emit env (C_AssumeStmt e')
   | A_IfStmt (cond, bodyT, bodyF) ->
     let cond' = canon_expr env cond in
     let envT = { env with stmts = [] } in

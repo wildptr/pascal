@@ -14,7 +14,7 @@ let () =
   in
   let prog = Canonicalize.canon_program ast in
   prog.procs |> Array.iter (Canon.pp_proc Format.std_formatter);
-  let alias_tab = Alias.build_alias_table prog in
+  let alias_tab = Alias.build_alias_tab prog in
   let vis_tab = Visibility.build_table prog in
   let module LowerX86 = Lower.Machine(X86) in
   let module RegAllocX86 = Regalloc.Machine(X86) in
@@ -36,6 +36,6 @@ let () =
   abs_prog.procs |> Array.iter begin fun proc ->
     proc
     |> LowerX86.lower_proc
-(*     |> RegAllocX86.allocate_registers *)
+    |> RegAllocX86.allocate_registers
     |> X86.emit_asm Format.std_formatter
   end
