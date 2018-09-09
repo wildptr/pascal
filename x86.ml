@@ -89,7 +89,7 @@ let uses = function
   | UNARY (_, _, r) -> S.singleton r
   | BINARY (_, _, r, o) -> S.add r (opd_uses o)
   | JMP o -> opd_uses o
-  | CJMP (_, o) -> opd_uses o
+  | CJMP (c, o) -> S.union (cond_uses c) (opd_uses o)
   | SET (c, _) -> cond_uses c
   | LOAD (_, m) -> mem_uses m
   | STORE (m, o) -> S.union (mem_uses m) (opd_uses o)
@@ -104,7 +104,8 @@ let t_config =
     { fp = 5;
       n_reg;
       param_loc = (fun i -> RO_Off (8+4*i));
-      retval_loc = (fun i -> i) }
+      retval_loc = (fun i -> i);
+      callee_saves = [3;6;7] }
 
 let pp_reg f r =
   if r < 8 then
@@ -263,8 +264,20 @@ let map_inst f = function
   | LEA (r, m) ->
     LEA (f r, map_mem f m)
 
-let move_related_pair = function
-  | MOV (r1, Reg r2) -> Some (r1, r2)
-  | UNARY (_, r1, r2) -> Some (r1, r2)
-  | BINARY (_, r1, r2, _) -> Some (r1, r2)
-  | _ -> None
+let move_related_pairs = function
+  | MOV (r1, Reg r2) -> [r1, r2]
+  | UNARY (_, r1, r2) -> [r1, r2]
+  | BINARY (_, r1, r2, _) -> [r1, r2]
+  | PHI (r1, l) -> List.map (fun {r;_} -> r1, r) l
+  | _ -> []
+
+let is_phi = function
+  | PHI _ -> true
+  | _ -> false
+
+let destruct_phi = function
+  | PHI (lhs, rhs) -> lhs, rhs
+  | _ -> invalid_arg "destruct_phi"
+
+let mk_mov lhs rhs =
+  MOV (lhs, Reg rhs)

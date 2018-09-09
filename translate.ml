@@ -25,7 +25,8 @@ type config = {
   fp : reg;
   n_reg : int;
   param_loc : int -> reg_or_offset;
-  retval_loc : int -> int
+  retval_loc : int -> int;
+  callee_saves : reg list
 }
 
 type info = {
@@ -139,6 +140,7 @@ let fresh_block_id env =
   i
 
 let merge_regtab env b1 b2 =
+  Printf.eprintf "join %s %s\n" b1.name b2.name;
   let regtab = Array.make env.nvar None in
   let insts = ref [] in
   let make_phi v r1 r2 m =
@@ -156,8 +158,10 @@ let merge_regtab env b1 b2 =
       else
         make_phi v r1 r2 (m1&&m2)
     | Some (r1, m1), None ->
+      (* make_phi v r1 (load_var env b2 v) m1 *)
       make_phi v r1 (load_var env b2 v) m1
     | None, Some (r2, m2) ->
+      (* make_phi v (load_var env b1 v) r2 m2 *)
       make_phi v (load_var env b1 v) r2 m2
     | None, None -> ()
   done;
@@ -231,8 +235,9 @@ and translate_elt_addr env base index =
   I_Binary (I_ADD, base_addr, I_Binary (I_MUL, i, I_Imm elt_size))
 
 let do_write_back env v r =
+  let size = var_size env v in
   let addr = get_addr env env.current_block v in
-  I_Store (var_size env v, addr, I_Reg r) |> emit env;
+  I_Store (size, addr, I_Reg r) |> emit env;
   update_reg env.current_block v r true
 
 let write_back env v =
@@ -258,30 +263,35 @@ let rec translate_stmt env = function
   | C_AssertStmt _ | C_AssumeStmt _ -> ()
 
   | C_IfStmt (cond, bodyT, bodyF) ->
-    let blkT = fresh_block env [env.current_block] in
-    let blkF = fresh_block env [env.current_block] in
+    let blkF_id = fresh_block_id env in
+    let blkF_name = block_name_of_id blkF_id in
 
-    I_Branch (I_Unary (I_NOT, translate_expr env cond), I_Label blkF.name) |>
-    emit env;
+    let cond' = translate_expr env cond in
+    I_Branch (I_Unary (I_NOT, cond'), I_Label blkF_name) |> emit env;
+
+    let blkT = fresh_block env [env.current_block] in
+    let blkF = fresh_block env ~id:blkF_id [env.current_block] in
 
     env.current_block <- blkT;
     bodyT |> List.iter (translate_stmt env);
+    let blkT' = env.current_block in
 
     env.current_block <- blkF;
     bodyF |> List.iter (translate_stmt env);
+    let blkF' = env.current_block in
 
-    let join = fresh_block env [blkT; blkF] in
-    I_Jump (I_Label join.name) |> emit_block blkT;
+    let join = fresh_block env [blkT'; blkF'] in
+    I_Jump (I_Label join.name) |> emit_block blkT';
     env.current_block <- join
 
   | C_RepeatStmt (_, body, cond) ->
     let pred = env.current_block in
     let blk = fresh_block env [pred] in
-    let tail = fresh_block env [blk] in
-    add_succ tail blk;
+    (* TODO this is wrong *)
+    let tail_id = fresh_block_id env in
     env.current_block <- blk;
     (* insert phi instructions *)
-    let rhs_tab = Array.init env.nvar (fun _ -> { pred = tail.id; r = 0 }) in
+    let rhs_tab = Array.init env.nvar (fun _ -> { pred = tail_id; r = 0 }) in
     let patch_rhs v r =
       rhs_tab.(v).r <- r
     in
@@ -300,6 +310,9 @@ let rec translate_stmt env = function
     let succ_id = fresh_block_id env in
     let succ_name = block_name_of_id succ_id in
     I_Branch (translate_expr env cond, I_Label succ_name) |> emit env;
+    let blk' = env.current_block in
+    let tail = fresh_block env ~id:tail_id [blk'] in
+    add_succ tail blk; (* back edge *)
     (* maintain loop invariants *)
     env.current_block <- tail;
     for v=0 to env.nvar - 1 do
@@ -315,7 +328,7 @@ let rec translate_stmt env = function
         ()
     done;
     I_Jump (I_Label blk.name) |> emit env;
-    env.current_block <- fresh_block env ~id:succ_id [blk]
+    env.current_block <- fresh_block env ~id:succ_id [blk']
   | C_CallStmt (vars, proc, args) ->
     let args' =
       args |> Array.mapi begin fun i arg ->
@@ -393,20 +406,37 @@ let translate config (info : info) (prog : program) =
       let next_reg = ref config.n_reg in
       let frame_link_loc = ref (RO_Reg 0) in
       let insts = ref [] in
+      (*let callee_saves =
+        config.callee_saves |> List.map begin fun pr ->
+          let vr = !next_reg in
+          incr next_reg;
+          insts := I_Set (vr, I_Reg pr) :: !insts;
+          (pr, vr)
+        end
+      in*)
       let local_start = proc.var_start.(head.depth) in
       for i=0 to np'-1 do
         match config.param_loc i with
-        | RO_Reg r ->
-          let r' = !next_reg in
+        | RO_Reg pr ->
+          let vr = !next_reg in
           incr next_reg;
-          insts := I_Set (r', I_Reg r) :: !insts;
+          insts := I_Set (vr, I_Reg pr) :: !insts;
           if i < np then
-            regtab.(local_start + i) <- Some (r', false)
+            regtab.(local_start + i) <- Some (vr, false)
           else
-            frame_link_loc := RO_Reg r'
+            frame_link_loc := RO_Reg vr
         | ro ->
           if i = np then
             frame_link_loc := ro
+      done;
+      for i = local_start + np to nvar-1 do
+        let v = proc.vars.(i) in
+        match loctab.(v.gid) with
+        | Some _ -> ()
+        | None ->
+          let r = !next_reg in
+          incr next_reg;
+          regtab.(i) <- Some (r, false)
       done;
       let blk =
         { insts = !insts; name = ".L0"; id = 0; succ = []; regtab }
@@ -470,6 +500,11 @@ let translate config (info : info) (prog : program) =
       (*for i = local_start to local_start + np - 1 do
         if proc.vars.(i).isref then write_back env i
       done;*)
+      (*callee_saves |> List.iter begin fun (pr, vr) ->
+        I_Set (pr, I_Reg vr) |> emit env
+      end;*)
+      env.blocks |> List.rev |> List.iteri
+        (fun i (b : tblock) -> assert (i = b.id));
       let blocks =
         env.blocks |> List.map finalize_block |> List.rev |> Array.of_list
       in

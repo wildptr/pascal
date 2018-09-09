@@ -147,9 +147,12 @@ module type MachineType = sig
   type inst
   val emit_inst : formatter -> inst -> unit
   val map_inst : (reg -> reg) -> inst -> inst
+  val is_phi : inst -> bool
+  val destruct_phi : inst -> reg * phi_rhs list
+  val mk_mov : reg -> reg -> inst
   val defs : inst -> Set.Int.t
   val uses : inst -> Set.Int.t
-  val move_related_pair : inst -> (reg * reg) option
+  val move_related_pairs : inst -> (reg * reg) list
   val n_reg : int
   val n_reg_avail : int
   val reg_mask : int

@@ -84,30 +84,44 @@ module Make (M : MachineType) = struct
       done
     in
 
+    let pred_insts i =
+      let rec loop s =
+        let s' =
+          Set.Int.fold
+            (fun i s ->
+               let insts = blocks.(i).insts in
+               if insts = [] then
+                 S.union s (Set.Int.of_list pred.(i))
+               else s)
+            s s
+        in
+        if not (Set.Int.equal s s') then loop s' else s'
+      in
+      S.fold
+        (fun i l ->
+           let insts = blocks.(i).insts in
+           if insts = [] then l else List.last insts :: l)
+        (loop (S.singleton i))
+        []
+    in
+
     for i=0 to n-1 do
       let live_in_i =
         List.fold_right begin fun inst live ->
           let def = M.defs inst in
           connect def live;
-          begin match M.move_related_pair inst with
-            | Some (r1, r2) ->
-              Printf.eprintf "move-related: %d -- %d\n" r1 r2;
-              G.add_edge m r1 r2
-            | None -> ()
-          end;
+          M.move_related_pairs inst |> List.iter
+            (fun (r1, r2) -> if r1 <> r2 then G.add_edge m r1 r2);
           S.union (S.diff live def) (M.uses inst)
         end blocks.(i).insts live_out.(i)
       in
       assert (S.equal live_in_i live_in.(i));
-      pred.(i) |> List.iter begin fun j ->
-        let def = M.defs (List.last blocks.(j).insts) in
-        connect def live_in_i
-      end
+      pred_insts i |> List.iter
+        (fun inst -> connect (M.defs inst) live_in_i)
     done;
 
-    G.iter_edges begin fun i j ->
-      Printf.eprintf "interfere: %d -- %d\n" i j
-    end g;
+    G.iter_edges (Printf.eprintf "interfere: %d -- %d\n") g;
+    G.iter_edges (Printf.eprintf "move-related: %d -- %d\n") m;
 
     (* register allocation *)
 
@@ -150,7 +164,7 @@ module Make (M : MachineType) = struct
          Nodes i and j can be coalesced if, for every neighbor k of i, either k
          already interferes with j or k is of insignificant degree. *)
       let coalesce () =
-        let changed = ref false in
+        let old_p = !p in
         let rec loop () =
           try
             G.iter_edges begin fun i j ->
@@ -170,7 +184,6 @@ module Make (M : MachineType) = struct
                   Printf.printf "coalesce %d %d\n" i j;
                   G.iter_succ (G.add_edge g i) g j;
                   remove_node j (Same i);
-                  changed := true;
                   raise Break
                 end
               end
@@ -178,7 +191,7 @@ module Make (M : MachineType) = struct
           with Break -> loop ()
         in
         loop ();
-        !changed
+        !p < old_p
       in
       let freeze () =
         try
