@@ -12,7 +12,8 @@ type opd =
 type mem = {
   base : reg option;
   index : (reg * int) option;
-  disp : int
+  disp : int;
+  size : int
 }
 
 let n_reg = 8
@@ -116,8 +117,15 @@ let pp_opd f = function
   | Imm i -> pp_print_int f i
   | Label s -> pp_print_string f s
 
-let pp_mem f { base; index; disp } =
-  pp_print_char f '[';
+let pp_mem f { base; index; disp; size } =
+  let s =
+    match size with
+    | 1 -> "byte"
+    | 2 -> "word"
+    | 4 -> "dword"
+    | _ -> failwith "pp_mem"
+  in
+  fprintf f "%s [" s;
   let sep = ref false in
   begin match base with
     | Some r ->
@@ -216,10 +224,10 @@ let map_opd f = function
   | Reg r -> Reg (f r)
   | o -> o
 
-let map_mem f { base; index; disp } =
+let map_mem f { base; index; disp; size } =
   { base = Option.map f base;
     index = (match index with None -> None | Some (r, i) -> Some (f r, i));
-    disp }
+    disp; size }
 
 let map_cond f = function
   | Cond1 (op, r) ->

@@ -97,11 +97,8 @@ let rec convert_mem_loc env b = function
   | Indirect (Direct r, off) ->
     I_Binary (I_ADD, I_Reg r, I_Imm off)
   | Indirect (loc, off) ->
-    let addr = convert_mem_loc env b loc in
-    let addr' =
-      if off = 0 then addr else I_Binary (I_ADD, addr, I_Imm off)
-    in
-    I_Load addr'
+    let addr = I_Load (4, convert_mem_loc env b loc) in
+    if off = 0 then addr else I_Binary (I_ADD, addr, I_Imm off)
 
 let get_loc env v =
   env.var_info.(v).loc
@@ -120,10 +117,14 @@ let is_visible env v =
 let get_aliases env v =
   env.var_info.(v).aliases
 
+let var_size env v =
+  size_of_type env.var_info.(v).var.typ
+
 let load_var env b v =
+  let size = var_size env v in
   let addr = get_addr env b v in
   let r = fresh_reg env in
-  I_Set (r, I_Load addr) |> emit_block b;
+  I_Set (r, I_Load (size, addr)) |> emit_block b;
   update_reg b v r true;
   r
 
@@ -191,10 +192,11 @@ let rec translate_expr env = function
       | Not -> I_NOT
     in
     I_Unary (op', e')
-  | C_BinaryExpr (op, e1, e2, _) ->
+  | C_BinaryExpr (op, e1, e2, typ) ->
     begin match op with
       | Select ->
-        I_Load (translate_elt_addr env e1 e2)
+        let size = size_of_type typ in
+        I_Load (size, translate_elt_addr env e1 e2)
       | _ ->
         let e1' = translate_expr env e1 in
         let e2' = translate_expr env e2 in
@@ -230,7 +232,7 @@ and translate_elt_addr env base index =
 
 let do_write_back env v r =
   let addr = get_addr env env.current_block v in
-  I_Store (addr, I_Reg r) |> emit env;
+  I_Store (var_size env v, addr, I_Reg r) |> emit env;
   update_reg env.current_block v r true
 
 let write_back env v =
@@ -347,9 +349,10 @@ let rec translate_stmt env = function
     end
 
   | C_StoreStmt (base, index, value) ->
+    let size = type_of_expr value |> size_of_type in
     let addr = translate_elt_addr env base index in
     let o = translate_expr env value in
-    I_Store (addr, o) |> emit env
+    I_Store (size, addr, o) |> emit env
 
 let translate config (info : info) (prog : program) =
   (* TODO: inner-most procedures don't need parent FP *)

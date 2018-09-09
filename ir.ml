@@ -29,13 +29,13 @@ type abs_expr =
   | I_Label of string
   | I_Unary of abs_unary_op * abs_expr
   | I_Binary of abs_binary_op * abs_expr * abs_expr
-  | I_Load of abs_expr
+  | I_Load of int * abs_expr
 
 type phi_rhs = { pred : int; mutable r : reg }
 
 type abs_inst =
   | I_Set of reg * abs_expr
-  | I_Store of abs_expr * abs_expr
+  | I_Store of int * abs_expr * abs_expr
   | I_Jump of abs_expr
   | I_Branch of abs_expr * abs_expr
   | I_Call of abs_expr * reg list
@@ -104,8 +104,8 @@ let rec pp_abs_expr f = function
       | I_LE  -> "LE"
     in
     fprintf f "%s(%a, %a)" s pp_abs_expr e1 pp_abs_expr e2
-  | I_Load e ->
-    fprintf f "[%a]" pp_abs_expr e
+  | I_Load (n, e) ->
+    fprintf f "[%a;%d]" pp_abs_expr e n
 
 let pp_list pp f = function
   | [] -> ()
@@ -116,8 +116,8 @@ let pp_list pp f = function
 let emit_abs_inst f = function
   | I_Set (r, e) ->
     fprintf f "\t%a := %a\n" pp_reg r pp_abs_expr e
-  | I_Store (addr, e) ->
-    fprintf f "\t[%a] := %a\n" pp_abs_expr addr pp_abs_expr e
+  | I_Store (n, addr, e) ->
+    fprintf f "\t[%a;%d] := %a\n" pp_abs_expr addr n pp_abs_expr e
   | I_Jump e ->
     fprintf f "\tGOTO %a\n" pp_abs_expr e
   | I_Branch (cond, e) ->
