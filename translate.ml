@@ -1,10 +1,9 @@
 open Batteries
 open Canon
 open Ir
-open Abstract
 
 type tblock = {
-  mutable insts : inst list;
+  mutable insts : abs_inst list;
   name : string;
   id : int;
   mutable succ : int list;
@@ -14,7 +13,7 @@ type tblock = {
 let add_succ b1 b2 =
   b1.succ <- b2.id :: b1.succ
 
-let finalize_block blk : block =
+let finalize_block blk : abs_block =
   let insts = List.rev blk.insts in
   { insts; succ = blk.succ; name = blk.name }
 
@@ -25,7 +24,8 @@ type reg_or_offset =
 type config = {
   fp : reg;
   n_reg : int;
-  param_loc : int -> reg_or_offset
+  param_loc : int -> reg_or_offset;
+  retval_loc : int -> int
 }
 
 type info = {
@@ -76,6 +76,13 @@ let fresh_reg env =
   env.next_reg <- i+1;
   i
 
+let to_reg env = function
+  | I_Reg r -> r
+  | e ->
+    let r = fresh_reg env in
+    I_Set (r, e) |> emit env;
+    r
+
 let get_reg b v =
   b.regtab.(v)
 
@@ -88,17 +95,18 @@ let kill_reg b v =
 let rec convert_mem_loc env b = function
   | Direct _ -> failwith "convert_mem_loc"
   | Indirect (Direct r, off) ->
-    (Some r, imm_i off)
+    I_Binary (I_ADD, I_Reg r, I_Imm off)
   | Indirect (loc, off) ->
-    let m = convert_mem_loc env b loc in
-    let r = fresh_reg env in
-    LOAD (r, m) |> emit_block b;
-    (Some r, imm_i off)
+    let addr = convert_mem_loc env b loc in
+    let addr' =
+      if off = 0 then addr else I_Binary (I_ADD, addr, I_Imm off)
+    in
+    I_Load addr'
 
 let get_loc env v =
   env.var_info.(v).loc
 
-let get_mem env b v =
+let get_addr env b v =
   match get_loc env v with
   | None ->
     let var = env.var_info.(v).var in
@@ -112,34 +120,17 @@ let is_visible env v =
 let get_aliases env v =
   env.var_info.(v).aliases
 
-let mem_to_opd env b (base, off) =
-  match base with
-  | Some base ->
-    let r = fresh_reg env in
-    (ALU2 (ADD, r, base, Imm off) |> emit_block b; Reg r)
-  | None -> Imm off
-
-let get_addr env b v =
-  mem_to_opd env b (get_mem env b v)
-
-let to_reg env = function
-  | Reg r -> r
-  | o ->
-    let r = fresh_reg env in
-    emit env (MOV (r, o));
-    r
-
 let load_var env b v =
-  let m = get_mem env b v in
+  let addr = get_addr env b v in
   let r = fresh_reg env in
-  LOAD (r, m) |> emit env;
+  I_Set (r, I_Load addr) |> emit_block b;
   update_reg b v r true;
   r
 
 let get_var env v =
   match get_reg env.current_block v with
-  | Some (r, _) -> Reg r
-  | None -> Reg (load_var env env.current_block v)
+  | Some (r, _) -> r
+  | None -> load_var env env.current_block v
 
 let fresh_block_id env =
   let i = env.n_block in
@@ -154,7 +145,7 @@ let merge_regtab env b1 b2 =
     regtab.(v) <- Some (r, m);
     let rhs1 = { pred = b1.id; r = r1 } in
     let rhs2 = { pred = b2.id; r = r2 } in
-    insts := PHI (r, [rhs1;rhs2]) :: !insts
+    insts := I_Phi (r, [rhs1;rhs2]) :: !insts
   in
   for v=0 to env.nvar - 1 do
     match b1.regtab.(v), b2.regtab.(v) with
@@ -188,44 +179,39 @@ let fresh_block env ?(id = fresh_block_id env) preds =
   blk
 
 let rec translate_expr env = function
-  | C_IntExpr i -> imm_opd_i i
-  | C_BoolExpr b -> imm_opd_i (if b then 1 else 0)
+  | C_IntExpr i -> I_Imm i
+  | C_BoolExpr b -> I_Imm (if b then 1 else 0)
   | C_VarExpr v ->
     assert (not (is_aggregate_type v.typ));
-    get_var env v.lid
+    I_Reg (get_var env v.lid)
   | C_UnaryExpr (op, e, _) ->
-    let s = translate_expr env e |> to_reg env in
-    let d = fresh_reg env in
+    let e' = translate_expr env e in
     let op' =
       match op with
-      | Not -> NOT
+      | Not -> I_NOT
     in
-    emit env (ALU1 (op', s, d)); Reg d
+    I_Unary (op', e')
   | C_BinaryExpr (op, e1, e2, _) ->
     begin match op with
       | Select ->
-        let m = translate_elt_addr env e1 e2 in
-        let r = fresh_reg env in
-        LOAD (r, m) |> emit env;
-        Reg r
+        I_Load (translate_elt_addr env e1 e2)
       | _ ->
-        let s1 = translate_expr env e1 |> to_reg env in
-        let s2 = translate_expr env e2 in
-        let d = fresh_reg env in
-        let inst =
+        let e1' = translate_expr env e1 in
+        let e2' = translate_expr env e2 in
+        let op' =
           match op with
-          | Add -> ALU2 (ADD, d, s1, s2)
-          | Sub -> ALU2 (SUB, d, s1, s2)
-          | Mul -> MUL (d, s1, s2)
-          | Eq    -> SET (Cond2 (EQ, s1, s2), d)
-          | NotEq -> SET (Cond2 (NE, s1, s2), d)
-          | Lt    -> SET (Cond2 (LT, s1, s2), d)
-          | GtEq  -> SET (Cond2 (GE, s1, s2), d)
-          | Gt    -> SET (Cond2 (GT, s1, s2), d)
-          | LtEq  -> SET (Cond2 (LE, s1, s2), d)
+          | Add -> I_ADD
+          | Sub -> I_SUB
+          | Mul -> I_MUL
+          | Eq    -> I_EQ
+          | NotEq -> I_NE
+          | Lt    -> I_LT
+          | GtEq  -> I_GE
+          | Gt    -> I_GT
+          | LtEq  -> I_LE
           | _ -> failwith "not implemented"
         in
-        emit env inst; Reg d
+        I_Binary (op', e1', e2')
     end
   | C_TernaryExpr (op, e1, e2, e3, _) ->
     failwith "not implemented"
@@ -235,55 +221,16 @@ and translate_elt_addr env base index =
     match base with
     | C_VarExpr v -> get_addr env env.current_block v.lid
     | C_BinaryExpr (Select, base', index', _) ->
-      translate_elt_addr env base' index' |> mem_to_opd env env.current_block
+      translate_elt_addr env base' index'
     | _ -> failwith ""
   in
   let elt_size = type_of_expr base |> elt_type_of |> size_of_type in
-  let i = translate_expr env index |> to_reg env in
-  let off = fresh_reg env in
-  MUL (off, i, imm_opd_i elt_size) |> emit env;
-  let addr = fresh_reg env in
-  ALU2 (ADD, addr, off, base_addr) |> emit env;
-  Some addr, imm_i 0
-
-let translate_cond_generic env neg target e =
-  let r = translate_expr env e |> to_reg env in
-  let cond = Cond1 ((if neg then Z else NZ), r) in
-  BRANCH (cond, target) |> emit env
-
-let negate_cond2 = function
-  | EQ -> NE
-  | NE -> EQ
-  | LT -> GE
-  | GE -> LT
-  | GT -> LE
-  | LE -> GT
-
-let translate_cond env neg target = function
-  | C_BinaryExpr (op, e1, e2, _) as e ->
-    let c =
-      match op with
-      | Eq    -> Some EQ
-      | NotEq -> Some NE
-      | Lt    -> Some LT
-      | GtEq  -> Some GE
-      | Gt    -> Some GT
-      | LtEq  -> Some LT
-      | _ -> None
-    in
-    begin match c with
-      | Some c ->
-        let s1 = translate_expr env e1 |> to_reg env in
-        let s2 = translate_expr env e2 in
-        let cond = Cond2 ((if neg then negate_cond2 c else c), s1, s2) in
-        BRANCH (cond, target) |> emit env
-      | None -> translate_cond_generic env neg target e
-    end
-  | e -> translate_cond_generic env neg target e
+  let i = translate_expr env index in
+  I_Binary (I_ADD, base_addr, I_Binary (I_MUL, i, I_Imm elt_size))
 
 let do_write_back env v r =
-  let m = get_mem env env.current_block v in
-  STORE (m, Reg r) |> emit env;
+  let addr = get_addr env env.current_block v in
+  I_Store (addr, I_Reg r) |> emit env;
   update_reg env.current_block v r true
 
 let write_back env v =
@@ -293,7 +240,7 @@ let write_back env v =
 
 let translate_assign env (v:var) o =
   let r = fresh_reg env in
-  MOV (r, o) |> emit env;
+  I_Set (r, o) |> emit env;
   (* kill aliases *)
   get_aliases env v.lid |> List.iter (kill_reg env.current_block);
   if v.isref then
@@ -312,7 +259,8 @@ let rec translate_stmt env = function
     let blkT = fresh_block env [env.current_block] in
     let blkF = fresh_block env [env.current_block] in
 
-    translate_cond env true (imm_opd_s blkF.name) cond;
+    I_Branch (I_Unary (I_NOT, translate_expr env cond), I_Label blkF.name) |>
+    emit env;
 
     env.current_block <- blkT;
     bodyT |> List.iter (translate_stmt env);
@@ -321,7 +269,7 @@ let rec translate_stmt env = function
     bodyF |> List.iter (translate_stmt env);
 
     let join = fresh_block env [blkT; blkF] in
-    JUMP (imm_opd_s join.name) |> emit_block blkT;
+    I_Jump (I_Label join.name) |> emit_block blkT;
     env.current_block <- join
 
   | C_RepeatStmt (_, body, cond) ->
@@ -341,7 +289,7 @@ let rec translate_stmt env = function
         let rhs_pred = { pred = pred.id; r } in
         let rhs_tail = rhs_tab.(v) in
         let r' = fresh_reg env in
-        PHI (r', [rhs_pred; rhs_tail]) |> emit env;
+        I_Phi (r', [rhs_pred; rhs_tail]) |> emit env;
         update_reg env.current_block v r' m
       | None -> ()
     done;
@@ -349,7 +297,7 @@ let rec translate_stmt env = function
     body |> List.iter (translate_stmt env);
     let succ_id = fresh_block_id env in
     let succ_name = block_name_of_id succ_id in
-    translate_cond env false (imm_opd_s succ_name) cond;
+    I_Branch (translate_expr env cond, I_Label succ_name) |> emit env;
     (* maintain loop invariants *)
     env.current_block <- tail;
     for v=0 to env.nvar - 1 do
@@ -364,19 +312,21 @@ let rec translate_stmt env = function
       | None, None ->
         ()
     done;
-    JUMP (imm_opd_s blk.name) |> emit env;
+    I_Jump (I_Label blk.name) |> emit env;
     env.current_block <- fresh_block env ~id:succ_id [blk]
   | C_CallStmt (vars, proc, args) ->
-    args |> Array.iteri begin fun i arg ->
-      let o =
-        if proc.params.(i).byref then
-          match arg with
-          | C_VarExpr v -> get_addr env env.current_block v.lid
-          | _ -> failwith "var argument not a variable"
-        else translate_expr env arg
-      in
-      emit env (MACH (PUT_ARG (i, o)))
-    end;
+    let args' =
+      args |> Array.mapi begin fun i arg ->
+        let o =
+          if proc.params.(i).byref then
+            match arg with
+            | C_VarExpr v -> get_addr env env.current_block v.lid
+            | _ -> failwith "var argument not a variable"
+          else translate_expr env arg
+        in
+        to_reg env o
+      end
+    in
     let v_end =
       if proc.depth > env.proc_depth then
         env.nvar
@@ -389,17 +339,17 @@ let rec translate_stmt env = function
         kill_reg env.current_block v
       end
     done;
-    emit env (CALL (imm_opd_s proc.name));
+    I_Call (I_Label proc.qual_name, Array.to_list args') |> emit env;
     vars |> Array.iteri begin fun i v ->
       let r = fresh_reg env in
-      emit env (MACH (GET_RETVAL (i, r)));
-      translate_assign env v (Reg r)
+      I_Set (r, I_Reg (env.config.retval_loc i)) |> emit env;
+      translate_assign env v (I_Reg r)
     end
 
   | C_StoreStmt (base, index, value) ->
-    let m = translate_elt_addr env base index in
+    let addr = translate_elt_addr env base index in
     let o = translate_expr env value in
-    STORE (m, o) |> emit env
+    I_Store (addr, o) |> emit env
 
 let translate config (info : info) (prog : program) =
   (* TODO: inner-most procedures don't need parent FP *)
@@ -446,7 +396,7 @@ let translate config (info : info) (prog : program) =
         | RO_Reg r ->
           let r' = !next_reg in
           incr next_reg;
-          insts := MOV (r', Reg r) :: !insts;
+          insts := I_Set (r', I_Reg r) :: !insts;
           if i < np then
             regtab.(local_start + i) <- Some (r', false)
           else
@@ -521,7 +471,7 @@ let translate config (info : info) (prog : program) =
         env.blocks |> List.map finalize_block |> List.rev |> Array.of_list
       in
       let n_reg = env.next_reg in
-      { name = head.qual_name; blocks; n_reg }
+      Abstract.{ name = head.qual_name; blocks; n_reg }
     end
   in
-  { procs }
+  procs

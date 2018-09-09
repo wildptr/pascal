@@ -16,8 +16,8 @@ let () =
   prog.procs |> Array.iter (Canon.pp_proc Format.std_formatter);
   let alias_tab = Alias.build_alias_tab prog in
   let vis_tab = Visibility.build_table prog in
-  let module LowerX86 = Lower.Machine(X86) in
-  let module RegAllocX86 = Regalloc.Machine(X86) in
+  let module X86_IR = Ir.MakeIR(Ir.MakeInst(X86)) in
+  let module RegAllocX86 = Regalloc.Make(X86) in
   let dsa_prog = Dsa.dsa alias_tab prog in
   dsa_prog.procs |> Array.iter (Canon.pp_proc Format.std_formatter);
   dsa_prog.procs |> Array.iter begin fun proc ->
@@ -33,9 +33,11 @@ let () =
   end;
   let t_info = Translate.{ vis_tab; alias_tab } in
   let abs_prog = Translate.translate X86.t_config t_info prog in
-  abs_prog.procs |> Array.iter begin fun proc ->
+  abs_prog |> Array.iter begin fun proc ->
     proc
+    |> (fun p -> Format.eprintf "%a@." Ir.pp_abs_proc p; p)
     |> LowerX86.lower_proc
+    |> (fun p -> Format.eprintf "%a@." X86_IR.pp_proc p; p)
     |> RegAllocX86.allocate_registers
-    |> X86.emit_asm Format.std_formatter
+    |> (Format.eprintf "%a@." X86_IR.pp_proc)
   end

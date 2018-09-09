@@ -1,140 +1,161 @@
 open Batteries
+open Format
 
 type reg = int
 
-type imm = { s : string; i : int }
+type abs_unary_op =
+  | I_NOT
+  | I_NEG
+  | I_Z
+  | I_NZ
 
-type opd =
-  | Reg of reg
-  | Imm of imm
+type abs_binary_op =
+  | I_ADD
+  | I_SUB
+  | I_MUL
+  | I_AND
+  | I_OR
+  | I_XOR
+  | I_EQ
+  | I_NE
+  | I_LT
+  | I_GE
+  | I_GT
+  | I_LE
 
-let imm_s s = { s; i = 0 }
-let imm_i i = { s = ""; i }
-let imm s i = { s; i }
+type abs_expr =
+  | I_Reg of reg
+  | I_Imm of int
+  | I_Label of string
+  | I_Unary of abs_unary_op * abs_expr
+  | I_Binary of abs_binary_op * abs_expr * abs_expr
+  | I_Load of abs_expr
 
-let imm_opd_s s = Imm (imm_s s)
-let imm_opd_i i = Imm (imm_i i)
-let imm_opd s i = Imm (imm s i)
+type phi_rhs = { pred : int; mutable r : reg }
 
-type alu1 =
-  | NOT
-  | NEG
+type abs_inst =
+  | I_Set of reg * abs_expr
+  | I_Store of abs_expr * abs_expr
+  | I_Jump of abs_expr
+  | I_Branch of abs_expr * abs_expr
+  | I_Call of abs_expr * reg list
+  | I_Return
+  | I_Phi of reg * phi_rhs list
 
-type alu2 =
-  | ADD
-  | SUB
-  | AND
-  | OR
-  | XOR
-
-type cond1 = Z | NZ
-type cond2 = EQ | NE | LT | GE | GT | LE
-
-type cond =
-  | Cond1 of cond1 * reg
-  | Cond2 of cond2 * reg * opd
-
-type mem = reg option * imm
-
-let map_opd f = function
-  | Reg r -> Reg (f r)
-  | o -> o
-
-let map_mem f (base, offset) =
-  Option.map f base, offset
-
-let map_cond f = function
-  | Cond1 (op, r) ->
-    Cond1 (op, f r)
-  | Cond2 (op, r, o) ->
-    Cond2 (op, f r, map_opd f o)
-
-module type SpecInstType = sig
+module type InstType = sig
   type t
-  val map : (reg -> reg) -> t -> t
+  val emit : formatter -> t -> unit
 end
 
-type phi_rhs = { pred : int; mutable r : int }
-
-module OfInstType (I : SpecInstType) = struct
-
-  type inst =
-    | MOV of reg * opd
-    | ALU1 of alu1 * reg * reg
-    | ALU2 of alu2 * reg * reg * opd
-    | JUMP of opd
-    | BRANCH of cond * opd
-    | SET of cond * reg
-    | LOAD of reg * mem
-    | STORE of mem * opd
-    | MUL of reg * reg * opd
-    | CALL of opd
-    | RET
-    | PHI of reg * phi_rhs list
-    | MACH of I.t
-
-  let map_inst f = function
-    | MOV (r, o) ->
-      MOV (f r, map_opd f o)
-    | ALU1 (op, r1, r2) ->
-      ALU1 (op, f r1, f r2)
-    | ALU2 (op, r1, r2, o) ->
-      ALU2 (op, f r1, f r2, map_opd f o)
-    | JUMP o ->
-      JUMP (map_opd f o)
-    | BRANCH (c, o) ->
-      BRANCH (map_cond f c, map_opd f o)
-    | SET (c, r) ->
-      SET (map_cond f c, f r)
-    | LOAD (r, m) ->
-      LOAD (f r, map_mem f m)
-    | STORE (m, o) ->
-      STORE (map_mem f m, map_opd f o)
-    | MUL (r1, r2, o) ->
-      MUL (f r1, f r2, map_opd f o)
-    | CALL o ->
-      CALL (map_opd f o)
-    | RET ->
-      RET
-    | PHI (r, l) ->
-      PHI (f r, List.map (fun {pred;r} -> { pred; r = f r }) l)
-    | MACH inst ->
-      MACH (I.map f inst)
+module MakeIR (I : InstType) = struct
 
   type block = {
-    insts : inst list;
+    insts : I.t list;
     succ : int list;
-    name : string;
+    name : string
   }
 
-  type abs_proc = {
+  type proc = {
     name : string;
     blocks : block array;
-    n_reg : int;
+    n_reg : int
   }
 
-  type abs_prog = {
-    procs : abs_proc array;
-  }
+  let pp_block f (b:block) =
+    fprintf f "%s:\n" b.name;
+    b.insts |> List.iter (I.emit f)
+
+  let pp_proc f proc =
+    fprintf f "procedure %s\n" proc.name;
+    proc.blocks |> Array.iter (pp_block f)
 
 end
 
-module AbsMachInst = struct
+let pp_reg f r =
+  fprintf f "r%d" r
 
-  type t =
-    | PUT_ARG of int * opd
-    | GET_ARG of int * reg
-    | PUT_RETVAL of int * opd
-    | GET_RETVAL of int * reg
-    | GET_FP of reg
+let rec pp_abs_expr f = function
+  | I_Reg r -> pp_reg f r
+  | I_Imm i -> pp_print_int f i
+  | I_Label s -> pp_print_string f s
+  | I_Unary (op, e) ->
+    let s =
+      match op with
+      | I_NOT -> "NOT"
+      | I_NEG -> "NEG"
+      | I_Z -> "Z"
+      | I_NZ -> "NZ"
+    in
+    fprintf f "%s(%a)" s pp_abs_expr e
+  | I_Binary (op, e1, e2) ->
+    let s =
+      match op with
+      | I_ADD -> "ADD"
+      | I_SUB -> "SUB"
+      | I_MUL -> "MUL"
+      | I_AND -> "AND"
+      | I_OR  -> "OR"
+      | I_XOR -> "XOR"
+      | I_EQ  -> "EQ"
+      | I_NE  -> "NE"
+      | I_LT  -> "LT"
+      | I_GE  -> "GE"
+      | I_GT  -> "GT"
+      | I_LE  -> "LE"
+    in
+    fprintf f "%s(%a, %a)" s pp_abs_expr e1 pp_abs_expr e2
+  | I_Load e ->
+    fprintf f "[%a]" pp_abs_expr e
 
-  let map f = function
-    | PUT_ARG (i, o) -> PUT_ARG (i, map_opd f o)
-    | GET_ARG (i, r) -> GET_ARG (i, f r)
-    | PUT_RETVAL (i, o) -> PUT_RETVAL (i, map_opd f o)
-    | GET_RETVAL (i, r) -> GET_RETVAL (i, f r)
-    | GET_FP r -> GET_FP (f r)
+let pp_list pp f = function
+  | [] -> ()
+  | hd::tl ->
+    pp f hd;
+    List.iter (fprintf f ", %a" pp) tl
 
+let emit_abs_inst f = function
+  | I_Set (r, e) ->
+    fprintf f "\t%a := %a\n" pp_reg r pp_abs_expr e
+  | I_Store (addr, e) ->
+    fprintf f "\t[%a] := %a\n" pp_abs_expr addr pp_abs_expr e
+  | I_Jump e ->
+    fprintf f "\tGOTO %a\n" pp_abs_expr e
+  | I_Branch (cond, e) ->
+    fprintf f "\tGOTO %a IF %a\n" pp_abs_expr e pp_abs_expr cond
+  | I_Call (e, l) ->
+    fprintf f "\tCALL %a(%a)\n" pp_abs_expr e (pp_list pp_reg) l
+  | I_Return ->
+    pp_print_string f "\tRETURN\n"
+  | I_Phi (r, l) ->
+    let pp_rhs f { pred; r } =
+      fprintf f "%d:%a" pred pp_reg r
+    in
+    fprintf f "\t%a := PHI(%a)\n" pp_reg r (pp_list pp_rhs) l
+
+module Abstract = MakeIR
+  (struct
+    type t = abs_inst
+    let emit = emit_abs_inst
+  end)
+
+type abs_block = Abstract.block
+type abs_proc = Abstract.proc
+
+let pp_abs_proc = Abstract.pp_proc
+
+module type MachineType = sig
+  type inst
+  val emit_inst : formatter -> inst -> unit
+  val map_inst : (reg -> reg) -> inst -> inst
+  val defs : inst -> Set.Int.t
+  val uses : inst -> Set.Int.t
+  val move_related_pair : inst -> (reg * reg) option
+  val n_reg : int
+  val n_reg_avail : int
+  val reg_mask : int
 end
 
-module Abstract = OfInstType (AbsMachInst)
+module MakeInst (M : MachineType) = struct
+  type t = M.inst
+  let emit = M.emit_inst
+end

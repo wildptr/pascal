@@ -1,6 +1,5 @@
 open Batteries
 open Ir
-open Inst
 
 module S = Set.Int
 
@@ -10,13 +9,10 @@ type color_constraint =
   | Distinct of int list
   | Same of int
 
-module Machine (M : MachineType) = struct
+module Make (M : MachineType) = struct
 
-  module MIR = OfInstType(M.SpecInst)
-  module MInst = Inst.Machine(M)
-
+  module MIR = MakeIR(MakeInst(M))
   open MIR
-  open MInst
 
   let allocate_registers proc =
 
@@ -35,8 +31,8 @@ module Machine (M : MachineType) = struct
 
     for i=0 to n-1 do
       blocks.(i).insts |> List.iter begin fun inst ->
-        use.(i) <- S.union use.(i) (S.diff (uses inst) def.(i));
-        def.(i) <- S.union def.(i) (defs inst)
+        use.(i) <- S.union use.(i) (S.diff (M.uses inst) def.(i));
+        def.(i) <- S.union def.(i) (M.defs inst)
       end;
       blocks.(i).succ |> List.iter (fun j -> pred.(j) <- i :: pred.(j))
     done;
@@ -83,7 +79,6 @@ module Machine (M : MachineType) = struct
       let n = Array.length a in
       for i=0 to n-1 do
         for j=i+1 to n-1 do
-          (* Printf.eprintf "interfere: %d -- %d\n" a.(i) a.(j); *)
           G.add_edge g a.(i) a.(j)
         done
       done
@@ -92,23 +87,27 @@ module Machine (M : MachineType) = struct
     for i=0 to n-1 do
       let live_in_i =
         List.fold_right begin fun inst live ->
-          let def = defs inst in
+          let def = M.defs inst in
           connect def live;
-          begin match inst with
-            | MOV (d, Reg s) ->
-              Printf.eprintf "move-related: %d -- %d\n" d s;
-              G.add_edge m d s
-            | _ -> ()
+          begin match M.move_related_pair inst with
+            | Some (r1, r2) ->
+              Printf.eprintf "move-related: %d -- %d\n" r1 r2;
+              G.add_edge m r1 r2
+            | None -> ()
           end;
-          S.union (S.diff live def) (uses inst)
+          S.union (S.diff live def) (M.uses inst)
         end blocks.(i).insts live_out.(i)
       in
       assert (S.equal live_in_i live_in.(i));
       pred.(i) |> List.iter begin fun j ->
-        let def = defs (List.last blocks.(j).insts) in
+        let def = M.defs (List.last blocks.(j).insts) in
         connect def live_in_i
       end
     done;
+
+    G.iter_edges begin fun i j ->
+      Printf.eprintf "interfere: %d -- %d\n" i j
+    end g;
 
     (* register allocation *)
 
@@ -120,11 +119,12 @@ module Machine (M : MachineType) = struct
       G.out_degree g i < M.n_reg_avail
     in
 
-    let color_order = Array.make nr (0, Distinct []) in
+    let nvirt = nr - M.n_reg in
+    let color_order = Array.make nvirt (0, Distinct []) in
     begin
-      let p = ref nr in
+      let p = ref nvirt in
       let nodes = ref Set.Int.empty in
-      for i=0 to nr-1 do
+      for i=M.n_reg to nr-1 do
         nodes := Set.Int.add i !nodes
       done;
       let remove_node i c =
@@ -138,8 +138,10 @@ module Machine (M : MachineType) = struct
       let rec simplify () =
         let old_p = !p in
         !nodes |> Set.Int.iter begin fun i ->
-          if low_degree i && not (move_related i) then
+          if low_degree i && not (move_related i) then begin
+            Printf.eprintf "simplify %d\n" i;
             remove_node i (Distinct (G.succ g i))
+          end
         end;
         if !p < old_p then simplify ()
       in
@@ -152,18 +154,26 @@ module Machine (M : MachineType) = struct
         let rec loop () =
           try
             G.iter_edges begin fun i j ->
-              begin
-                try
-                  G.iter_succ begin fun k ->
-                    if not (G.mem_edge g k j || low_degree k) then
-                      raise Break
-                  end g i;
-                with Break -> () (* cannot coalesce *)
-              end;
-              Printf.printf "coalesce %d %d\n" i j;
-              remove_node j (Same i);
-              changed := true;
-              raise Break
+              if not (G.mem_edge g i j) then begin
+                let i, j =
+                  if i<j then i, j else j, i
+                in
+                if j >= M.n_reg then begin
+                  begin
+                    try
+                      G.iter_succ begin fun k ->
+                        if not (G.mem_edge g k j || low_degree k) then
+                          raise Break
+                      end g i;
+                    with Break -> () (* cannot coalesce *)
+                  end;
+                  Printf.printf "coalesce %d %d\n" i j;
+                  G.iter_succ (G.add_edge g i) g j;
+                  remove_node j (Same i);
+                  changed := true;
+                  raise Break
+                end
+              end
             end m;
           with Break -> loop ()
         in
@@ -184,6 +194,7 @@ module Machine (M : MachineType) = struct
       in
       let spill () =
         let i = Set.Int.choose !nodes in
+        Printf.eprintf "spill %d\n" i;
         remove_node i (Distinct (G.succ g i))
       in
       let rec loop () =
@@ -207,7 +218,11 @@ module Machine (M : MachineType) = struct
       match c with
       | Distinct l ->
         let f =
-          List.fold_left (fun f j -> f lor (1 lsl color.(j)))
+          List.fold_left
+            (fun f j ->
+               let c = color.(j) in
+               assert (c >= 0);
+               f lor (1 lsl c))
             M.reg_mask l
         in
         let rec loop c =
@@ -220,9 +235,13 @@ module Machine (M : MachineType) = struct
         color.(i) <- color.(j)
     end;
 
+    for i=M.n_reg to nr-1 do
+      Printf.eprintf "color[%d]=%d\n" i color.(i)
+    done;
+
     let blocks =
       proc.blocks |> Array.map begin fun blk ->
-        let insts = blk.insts |> List.map (map_inst (Array.get color)) in
+        let insts = blk.insts |> List.map (M.map_inst (Array.get color)) in
         { blk with insts }
       end
     in

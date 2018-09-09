@@ -1,19 +1,15 @@
 open Batteries
 open Ir
-open Inst
 
-module Machine (M : MachineType) = struct
+module Make (M : MachineType) = struct
 
-  module MIR = OfInstType(M.SpecInst)
-  module LiftM = Lift(M)
+  module MIR = MakeIR(MakeInst(M))
 
-  open Abstract
-
-  let lower_proc proc : MIR.abs_proc =
+  let lower_proc (proc : abs_proc) : MIR.proc =
     let blocks =
-      proc.blocks |> Array.map begin fun blk ->
-        let insts = blk.insts |> List.map LiftM.lift_inst in
-        MIR.{ insts; succ = blk.succ; name = blk.name }
+      proc.blocks |> Array.map begin fun (b : abs_block) ->
+        let insts = M.lower_insts b.insts in
+        MIR.{ insts; succ = b.succ; name = b.name }
       end
     in
     MIR.{ name = proc.name; blocks; n_reg = proc.n_reg }
