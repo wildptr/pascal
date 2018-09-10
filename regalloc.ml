@@ -181,7 +181,7 @@ module Make (M : MachineType) = struct
                       end g i;
                     with Break -> () (* cannot coalesce *)
                   end;
-                  Printf.printf "coalesce %d %d\n" i j;
+                  Printf.eprintf "coalesce %d %d\n" i j;
                   G.iter_succ (G.add_edge g i) g j;
                   remove_node j (Same i);
                   raise Break

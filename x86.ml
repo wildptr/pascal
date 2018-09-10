@@ -18,7 +18,7 @@ type mem = {
 
 let n_reg = 8
 let n_reg_avail = 6
-let reg_mask = lnot 0b11001111
+let reg_mask = 0b00110000
 let reg_name = [|"eax";"ecx";"edx";"ebx";"esp";"ebp";"esi";"edi"|]
 
 type unary =
@@ -100,12 +100,14 @@ let uses = function
   | LEA (_, m) -> mem_uses m
 
 let t_config =
-  Translate.
-    { fp = 5;
-      n_reg;
-      param_loc = (fun i -> RO_Off (8+4*i));
-      retval_loc = (fun i -> i);
-      callee_saves = [3;6;7] }
+  Translate.{
+    fp = 5;
+    n_reg;
+    param_loc = (fun i -> RO_Off (8+4*i));
+    retval_loc = (fun i -> i);
+    callee_saves = [3;6;7];
+    stack_arg_size = ( * ) 4
+  }
 
 let pp_reg f r =
   if r < 8 then
@@ -281,3 +283,7 @@ let destruct_phi = function
 
 let mk_mov lhs rhs =
   MOV (lhs, Reg rhs)
+
+let is_jump = function
+  | JMP _ | CJMP _ -> true
+  | _ -> false

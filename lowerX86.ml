@@ -14,13 +14,13 @@ let fresh_reg env =
   env.next_reg <- i+1;
   i
 
-let flush env =
-  let insts = List.rev env.insts in
-  env.insts <- [];
-  insts
-
 let emit env inst =
   env.insts <- inst :: env.insts
+
+let flush env =
+  let insts = env.insts in
+  env.insts <- [];
+  insts
 
 let to_reg env = function
   | Reg r -> r
@@ -185,8 +185,16 @@ let lower_proc (p : abs_proc) =
   let blocks =
     p.blocks |> Array.map begin fun (b : abs_block) ->
       b.insts |> List.iter (lower_inst env);
-      let insts = flush env in
-      X86_IR.{ insts; succ = b.succ; name = b.name }
+      X86_IR.{
+        insts = flush env;
+        succ = b.succ;
+        name = b.name
+      }
     end
   in
-  X86_IR.{ name = p.name; blocks; n_reg = env.next_reg }
+  X86_IR.
+    { name = p.name;
+      blocks;
+      n_reg = env.next_reg;
+      frame_size = p.frame_size;
+      stack_arg_size = p.stack_arg_size }

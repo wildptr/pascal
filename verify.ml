@@ -78,7 +78,7 @@ let verify_proc proc =
   let env = { z3; tab } in
   let post = Z3.Boolean.mk_val z3 true in
   let vc = List.fold_right (wp env) proc.body post in
-  vc |> Z3.Expr.to_string |> print_endline;
+(*   vc |> Z3.Expr.to_string |> print_endline; *)
   let solver = Z3.Solver.mk_simple_solver z3 in
   Z3.Solver.add solver [Z3.Boolean.mk_not z3 vc];
   let status = Z3.Solver.check solver [] in

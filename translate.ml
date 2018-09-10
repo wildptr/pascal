@@ -14,8 +14,9 @@ let add_succ b1 b2 =
   b1.succ <- b2.id :: b1.succ
 
 let finalize_block blk : abs_block =
-  let insts = List.rev blk.insts in
-  { insts; succ = blk.succ; name = blk.name }
+  { insts = List.rev blk.insts;
+    succ = blk.succ;
+    name = blk.name }
 
 type reg_or_offset =
   | RO_Reg of int
@@ -26,7 +27,8 @@ type config = {
   n_reg : int;
   param_loc : int -> reg_or_offset;
   retval_loc : int -> int;
-  callee_saves : reg list
+  callee_saves : reg list;
+  stack_arg_size : int -> int
 }
 
 type info = {
@@ -167,18 +169,21 @@ let merge_regtab env b1 b2 =
   done;
   regtab, !insts
 
-let block_name_of_id i =
-  Printf.sprintf ".L%d" i
-
-let fresh_block env ?(id = fresh_block_id env) preds =
-  let name = block_name_of_id id in
+let fresh_block env preds =
+  let id = fresh_block_id env in
+  let name = Printf.sprintf ".L%d" id in
   let regtab, insts =
     match preds with
     | [b] -> Array.copy b.regtab, []
     | [b1;b2] -> merge_regtab env b1 b2
     | _ -> failwith ""
   in
-  let (blk:tblock) = { insts; name; id; succ = []; regtab } in
+  let (blk:tblock) =
+    { insts;
+      name; id;
+      succ = [];
+      regtab }
+  in
   preds |> List.iter (fun b -> add_succ b blk);
   env.blocks <- blk :: env.blocks;
   blk
@@ -263,14 +268,13 @@ let rec translate_stmt env = function
   | C_AssertStmt _ | C_AssumeStmt _ -> ()
 
   | C_IfStmt (cond, bodyT, bodyF) ->
-    let blkF_id = fresh_block_id env in
-    let blkF_name = block_name_of_id blkF_id in
 
     let cond' = translate_expr env cond in
-    I_Branch (I_Unary (I_NOT, cond'), I_Label blkF_name) |> emit env;
 
     let blkT = fresh_block env [env.current_block] in
-    let blkF = fresh_block env ~id:blkF_id [env.current_block] in
+    let blkF = fresh_block env [env.current_block] in
+
+    emit env (I_Branch (I_Unary (I_NOT, cond'), I_Label blkF.name));
 
     env.current_block <- blkT;
     bodyT |> List.iter (translate_stmt env);
@@ -281,38 +285,36 @@ let rec translate_stmt env = function
     let blkF' = env.current_block in
 
     let join = fresh_block env [blkT'; blkF'] in
-    I_Jump (I_Label join.name) |> emit_block blkT';
+    emit_block blkT' (I_Jump (I_Label join.name));
     env.current_block <- join
 
   | C_RepeatStmt (_, body, cond) ->
     let pred = env.current_block in
-    let blk = fresh_block env [pred] in
-    (* TODO this is wrong *)
-    let tail_id = fresh_block_id env in
-    env.current_block <- blk;
+    let body_blk = fresh_block env [pred] in
+    env.current_block <- body_blk;
     (* insert phi instructions *)
-    let rhs_tab = Array.init env.nvar (fun _ -> { pred = tail_id; r = 0 }) in
-    let patch_rhs v r =
-      rhs_tab.(v).r <- r
-    in
+    let rhs_tab = Array.init env.nvar (fun _ -> { pred = 0; r = 0 }) in
     for v=0 to env.nvar - 1 do
-      match get_reg env.current_block v with
+      match get_reg body_blk v with
       | Some (r, m) ->
         let rhs_pred = { pred = pred.id; r } in
         let rhs_tail = rhs_tab.(v) in
         let r' = fresh_reg env in
         I_Phi (r', [rhs_pred; rhs_tail]) |> emit env;
-        update_reg env.current_block v r' m
+        update_reg body_blk v r' m
       | None -> ()
     done;
     (* actually translate loop body *)
     body |> List.iter (translate_stmt env);
-    let succ_id = fresh_block_id env in
-    let succ_name = block_name_of_id succ_id in
-    I_Branch (translate_expr env cond, I_Label succ_name) |> emit env;
-    let blk' = env.current_block in
-    let tail = fresh_block env ~id:tail_id [blk'] in
-    add_succ tail blk; (* back edge *)
+    let cond' = translate_expr env cond in
+    let body_blk' = env.current_block in
+    let tail = fresh_block env [body_blk'] in
+    let patch_rhs v r =
+      let rhs = rhs_tab.(v) in
+      rhs.pred <- tail.id;
+      rhs.r <- r
+    in
+    add_succ tail body_blk; (* back edge *)
     (* maintain loop invariants *)
     env.current_block <- tail;
     for v=0 to env.nvar - 1 do
@@ -327,8 +329,11 @@ let rec translate_stmt env = function
       | None, None ->
         ()
     done;
-    I_Jump (I_Label blk.name) |> emit env;
-    env.current_block <- fresh_block env ~id:succ_id [blk']
+    emit_block body_blk (I_Jump (I_Label body_blk.name));
+    let succ = fresh_block env [body_blk'] in
+    env.current_block <- succ;
+    emit_block body_blk (I_Branch (cond', I_Label succ.name))
+
   | C_CallStmt (vars, proc, args) ->
     let args' =
       args |> Array.mapi begin fun i arg ->
@@ -369,7 +374,10 @@ let rec translate_stmt env = function
 
 let translate config (info : info) (prog : program) =
   (* TODO: inner-most procedures don't need parent FP *)
-  let stack_top = Array.make (Array.length prog.procs) (-4) in
+  let stack_top =
+    Array.init (Array.length prog.procs)
+      (fun i -> if prog.procs.(i).is_leaf then 0 else -4)
+  in
   let loctab = Array.make (Array.length prog.vars) None in
   let var_depth =
     prog.vars |> Array.map (fun v -> prog.procs.(v.proc_id).head.depth)
@@ -439,7 +447,10 @@ let translate config (info : info) (prog : program) =
           regtab.(i) <- Some (r, false)
       done;
       let blk =
-        { insts = !insts; name = ".L0"; id = 0; succ = []; regtab }
+        { insts = !insts;
+          name = ".L0"; id = 0;
+          succ = [];
+          regtab }
       in
       let var_info =
         proc.vars |> Array.map begin fun v ->
@@ -508,8 +519,12 @@ let translate config (info : info) (prog : program) =
       let blocks =
         env.blocks |> List.map finalize_block |> List.rev |> Array.of_list
       in
-      let n_reg = env.next_reg in
-      Abstract.{ name = head.qual_name; blocks; n_reg }
+      Abstract.
+        { name = head.qual_name;
+          blocks;
+          n_reg = env.next_reg;
+          frame_size = -stack_top.(head.id);
+          stack_arg_size = config.stack_arg_size np' }
     end
   in
   procs

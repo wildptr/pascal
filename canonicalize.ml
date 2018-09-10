@@ -240,15 +240,16 @@ let rec canon_proc env (proc : ast_proc) =
   let vars = proc_vars |> List.rev |> Array.of_list in
   let canon_env = { symtab = env'.symtab; stmts = [] } in
   proc.block.body |> List.iter (canon_stmt canon_env);
-  let proc =
-    { head;
-      body = List.rev canon_env.stmts;
-      vars;
-      var_start = var_start |> List.rev |> Array.of_list;
-      var_id_map =
-        Array.fold_left (fun m v -> Map.Int.add v.gid v.lid m)
-          Map.Int.empty vars }
-  in
+  let proc = {
+    head;
+    body = List.rev canon_env.stmts;
+    vars;
+    var_start = var_start |> List.rev |> Array.of_list;
+    var_id_map =
+      Array.fold_left (fun m v -> Map.Int.add v.gid v.lid m)
+        Map.Int.empty vars;
+    is_leaf = sub_trees_rev = []
+  } in
   { env with
     all_vars = env'.all_vars; var_gid = env'.var_gid; proc_id = env'.proc_id },
   Tree (proc, List.rev sub_trees_rev)

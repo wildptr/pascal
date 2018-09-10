@@ -31,7 +31,7 @@ type abs_expr =
   | I_Binary of abs_binary_op * abs_expr * abs_expr
   | I_Load of int * abs_expr
 
-type phi_rhs = { pred : int; mutable r : reg }
+type phi_rhs = { mutable pred : int; mutable r : reg }
 
 type abs_inst =
   | I_Set of reg * abs_expr
@@ -58,7 +58,9 @@ module MakeIR (I : InstType) = struct
   type proc = {
     name : string;
     blocks : block array;
-    n_reg : int
+    n_reg : int;
+    frame_size : int;
+    stack_arg_size : int
   }
 
   let pp_block f (b:block) =
@@ -150,6 +152,7 @@ module type MachineType = sig
   val is_phi : inst -> bool
   val destruct_phi : inst -> reg * phi_rhs list
   val mk_mov : reg -> reg -> inst
+  val is_jump : inst -> bool
   val defs : inst -> Set.Int.t
   val uses : inst -> Set.Int.t
   val move_related_pairs : inst -> (reg * reg) list

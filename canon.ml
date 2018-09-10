@@ -100,7 +100,8 @@ type proc = {
   body : stmt list;
   vars : var array;
   var_start : int array;
-  var_id_map : int Map.Int.t (* gid -> lid *)
+  var_id_map : int Map.Int.t; (* gid -> lid *)
+  is_leaf : bool
 }
 
 type program = {
